@@ -1,0 +1,828 @@
+{
+  "name": "Recepcionista IA Inmobiliaria (demo)",
+  "nodes": [
+    {
+      "id": "wa_in",
+      "name": "WhatsApp In",
+      "webhookId": "2bf7ee50-35b9-4076-b8ab-52f1de0999e0",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-recepcionista",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "norm",
+      "name": "Normalizar entrada",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "session_id",
+              "type": "string",
+              "value": "={{ $json.body.session_id }}"
+            },
+            {
+              "id": "a2",
+              "name": "texto",
+              "type": "string",
+              "value": "={{ $json.body.texto }}"
+            },
+            {
+              "id": "a3",
+              "name": "message_id",
+              "type": "string",
+              "value": "={{ $json.body.message_id }}"
+            },
+            {
+              "id": "a4",
+              "name": "nota_privada",
+              "type": "string",
+              "value": "={{ $json.body.nota_privada || '' }}"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "if_cmd",
+      "name": "¿Comando /ia?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cc1",
+              "leftValue": "={{ $json.nota_privada }}",
+              "rightValue": "/ia",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "pg_setia",
+      "name": "Set ia_activa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        60,
+        120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (session_id, ia_activa, updated_at) VALUES ($1, $2, now()) ON CONFLICT (session_id) DO UPDATE SET ia_activa = EXCLUDED.ia_activa, updated_at = now();",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, /\\/ia\\s*on/i.test($json.nota_privada)] }}"
+        }
+      }
+    },
+    {
+      "id": "noop_cmd",
+      "name": "Fin (comando IA)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        280,
+        120
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "pg_checkia",
+      "name": "Chequear ia_activa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        60,
+        420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE((SELECT ia_activa FROM leads WHERE session_id = $1 LIMIT 1), true) AS ia_activa;",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      }
+    },
+    {
+      "id": "if_pausa",
+      "name": "¿IA en pausa?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        280,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cp1",
+              "leftValue": "={{ $json.ia_activa === false }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "noop_pausa",
+      "name": "Fin (IA en pausa)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "rd_mark",
+      "name": "Buffer: marcar",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        500,
+        560
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'last:' + $('Normalizar entrada').item.json.session_id }}",
+        "value": "={{ $('Normalizar entrada').item.json.message_id }}",
+        "keyType": "string",
+        "expire": true,
+        "ttl": 60
+      }
+    },
+    {
+      "id": "wait_buf",
+      "name": "Esperar buffer",
+      "webhookId": "1a6b33a2-b316-453e-bc17-c887d1f18043",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        560
+      ],
+      "parameters": {
+        "amount": 7,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "rd_read",
+      "name": "Buffer: leer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        940,
+        560
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'last:' + $('Normalizar entrada').item.json.session_id }}",
+        "keyType": "string",
+        "propertyName": "ultimo_id",
+        "options": {}
+      }
+    },
+    {
+      "id": "if_last",
+      "name": "¿Último mensaje?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1160,
+        560
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cl1",
+              "leftValue": "={{ $json.ultimo_id }}",
+              "rightValue": "={{ $('Normalizar entrada').item.json.message_id }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "noop_desc",
+      "name": "Descartar (ráfaga)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        420
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1380,
+        700
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Normalizar entrada').item.json.texto }}",
+        "options": {
+          "systemMessage": "Sos el recepcionista de WhatsApp de 'Inmobiliaria Demo' (Bariloche). Atendés en español rioplatense, cordial y breve.\n\nREGLAS DURAS:\n- NUNCA inventes propiedades, precios, direcciones ni links. Mostrá SOLO lo que devuelve la herramienta buscar_propiedades en este turno.\n- Si no hay resultados o no estás seguro, ofrecé que un asesor lo confirme. Jamás afirmes un precio que no viste en la herramienta.\n- Precalificá al lead de a poco: operación (compra/alquiler), zona, presupuesto en USD, ambientes, forma de pago y urgencia. Guardá lo que sepas con guardar_precalificacion (no pidas el session_id, lo pone el sistema) y NO vuelvas a preguntar lo ya respondido.\n- Derivá a un asesor humano si el cliente lo pide, o si quiere coordinar una visita, hacer una oferta o reservar.",
+          "returnIntermediateSteps": true
+        }
+      }
+    },
+    {
+      "id": "llm",
+      "name": "OpenRouter Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1220,
+        920
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "options": {}
+      }
+    },
+    {
+      "id": "mem",
+      "name": "Memoria (Redis)",
+      "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
+      "typeVersion": 1.6,
+      "position": [
+        1360,
+        920
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Normalizar entrada').item.json.session_id }}",
+        "sessionTTL": 0
+      }
+    },
+    {
+      "id": "tool_buscar",
+      "name": "buscar_propiedades",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.7,
+      "position": [
+        1500,
+        920
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Busca propiedades reales del catálogo por operación (venta/alquiler), zona y presupuesto máximo en USD. Usala SIEMPRE antes de mencionar cualquier propiedad, precio o link.",
+        "operation": "executeQuery",
+        "query": "SELECT codigo, titulo, operacion, tipo, zona, ambientes, dormitorios, precio_usd, unidad_precio, url_ficha FROM propiedades WHERE activa AND ($1 = '' OR operacion = $1) AND ($2 = '' OR zona ILIKE '%' || $2 || '%') AND ($3 = 0 OR precio_usd <= $3) ORDER BY destacada DESC, precio_usd ASC LIMIT 3;",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('operacion', \"'venta' o 'alquiler'; vacío si no sabe\", 'string'), $fromAI('zona','barrio/zona de Bariloche; vacío si no sabe','string'), $fromAI('presupuesto_usd','presupuesto máximo en USD; 0 si no sabe','number')] }}"
+        }
+      }
+    },
+    {
+      "id": "tool_guardar",
+      "name": "guardar_precalificacion",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.7,
+      "position": [
+        1660,
+        920
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Guarda/actualiza lo que sabés del lead: operación (venta/alquiler), zona, presupuesto USD, ambientes, forma de pago y urgencia. No pidas el session_id: lo pone el sistema.",
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (session_id, operacion, zona, presupuesto_usd, ambientes, forma_pago, urgencia, updated_at) VALUES ($1, NULLIF($2,''), NULLIF($3,''), NULLIF($4,0), NULLIF($5,0), NULLIF($6,''), NULLIF($7,''), now()) ON CONFLICT (session_id) DO UPDATE SET operacion=COALESCE(EXCLUDED.operacion, leads.operacion), zona=COALESCE(EXCLUDED.zona, leads.zona), presupuesto_usd=COALESCE(EXCLUDED.presupuesto_usd, leads.presupuesto_usd), ambientes=COALESCE(EXCLUDED.ambientes, leads.ambientes), forma_pago=COALESCE(EXCLUDED.forma_pago, leads.forma_pago), urgencia=COALESCE(EXCLUDED.urgencia, leads.urgencia), updated_at=now();",
+        "options": {
+          "queryReplacement": "={{ [$('Normalizar entrada').item.json.session_id, $fromAI('operacion','venta o alquiler; vacío si no sabe','string'), $fromAI('zona','zona; vacío si no sabe','string'), $fromAI('presupuesto_usd','USD; 0 si no sabe','number'), $fromAI('ambientes','cantidad; 0 si no sabe','number'), $fromAI('forma_pago','contado/crédito/permuta; vacío si no sabe','string'), $fromAI('urgencia','alta/media/baja; vacío si no sabe','string')] }}"
+        }
+      }
+    },
+    {
+      "id": "verif",
+      "name": "Verificador anti-alucinación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        700
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Patrón 4: ningún precio ni link puede salir si no está respaldado por una tool de ESTE turno.\nconst out = $json.output ?? $json.text ?? '';\nconst steps = $json.intermediateSteps ?? [];\nconst evidencia = JSON.stringify(steps);\nconst soloDigitos = (s) => (s || '').replace(/[^0-9]/g, '');\nconst evidenciaDigitos = soloDigitos(evidencia);\n\nconst precioRe = /(?:usd|u\\$s|us\\$|\\$)\\s*([0-9][0-9.,]{2,})/gi;\nconst linkRe = /https?:\\/\\/[^\\s)]+/gi;\n\nconst noRespaldados = [];\nlet m;\nwhile ((m = precioRe.exec(out)) !== null) {\n  const d = soloDigitos(m[1]);\n  if (d.length >= 3 && !evidenciaDigitos.includes(d)) noRespaldados.push('precio ' + m[0].trim());\n}\nfor (const l of (out.match(linkRe) || [])) {\n  if (!evidencia.includes(l)) noRespaldados.push('link ' + l);\n}\n\nconst hardFail = noRespaldados.length > 0;\nreturn {\n  session_id: $('Normalizar entrada').item.json.session_id,\n  hardFail,\n  motivo: hardFail ? ('Datos sin respaldo del catálogo: ' + noRespaldados.join('; ')) : '',\n  mensaje: hardFail\n    ? 'Disculpá, prefiero no pasarte un dato sin confirmarlo. Ya le aviso a un asesor para que te responda esto a la brevedad 🙏'\n    : out,\n  nota_equipo: hardFail ? ('⚠️ Verificador bloqueó la respuesta. ' + noRespaldados.join('; ')) : ''\n};"
+      }
+    },
+    {
+      "id": "if_der",
+      "name": "¿Derivar o hardFail?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1840,
+        700
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cd1",
+              "leftValue": "={{ $json.hardFail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "cd2",
+              "leftValue": "={{ $('Normalizar entrada').item.json.texto }}",
+              "rightValue": "asesor|humano|visita|visitar|oferta|reservar",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      }
+    },
+    {
+      "id": "pg_nota",
+      "name": "Nota al equipo + pausa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2060,
+        560
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO eventos_equipo (session_id, tipo, detalle) VALUES ($1, $2, $3); UPDATE leads SET ia_activa = false, derivado = true, updated_at = now() WHERE session_id = $1;",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, ($json.hardFail ? 'hard_fail' : 'derivacion'), ($json.motivo || 'Derivación por intención del cliente (visita/oferta/asesor)')] }}"
+        }
+      }
+    },
+    {
+      "id": "code_split",
+      "name": "Partir en mensajes (≤250)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        820
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Patrón 3: partir la respuesta en mensajes de <=250 caracteres.\nconst src = $('Verificador anti-alucinación').first().json;\nconst msg = (src.mensaje ?? '').trim();\nconst session_id = src.session_id;\nconst partes = [];\nlet resto = msg;\nwhile (resto.length > 250) {\n  let corte = resto.lastIndexOf(' ', 250);\n  if (corte < 100) corte = 250;\n  partes.push(resto.slice(0, corte).trim());\n  resto = resto.slice(corte).trim();\n}\nif (resto) partes.push(resto);\nreturn partes.map((p, i) => ({ json: { session_id, parte: p, idx: i + 1, total: partes.length } }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Enviar de a uno",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2280,
+        820
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "noop_fin",
+      "name": "Fin (envío)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2500,
+        700
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "http_typing",
+      "name": "Typing… (simulado)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": false,
+      "onError": "continueRegularOutput",
+      "position": [
+        2500,
+        940
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://chatwoot.example/api/typing",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { session_id: $json.session_id, status: 'typing_on' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "wait_type",
+      "name": "Pausa ~3s",
+      "webhookId": "e47cabe7-1b1f-4b96-ad40-d94f6b9b19da",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2720,
+        940
+      ],
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "http_send",
+      "name": "Enviar mensaje (simulado)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": false,
+      "onError": "continueRegularOutput",
+      "position": [
+        2940,
+        940
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://chatwoot.example/api/messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { session_id: $json.session_id, text: $json.parte } }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp In": {
+      "main": [
+        [
+          {
+            "node": "Normalizar entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar entrada": {
+      "main": [
+        [
+          {
+            "node": "¿Comando /ia?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Comando /ia?": {
+      "main": [
+        [
+          {
+            "node": "Set ia_activa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Chequear ia_activa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set ia_activa": {
+      "main": [
+        [
+          {
+            "node": "Fin (comando IA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chequear ia_activa": {
+      "main": [
+        [
+          {
+            "node": "¿IA en pausa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿IA en pausa?": {
+      "main": [
+        [
+          {
+            "node": "Fin (IA en pausa)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buffer: marcar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buffer: marcar": {
+      "main": [
+        [
+          {
+            "node": "Esperar buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar buffer": {
+      "main": [
+        [
+          {
+            "node": "Buffer: leer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buffer: leer": {
+      "main": [
+        [
+          {
+            "node": "¿Último mensaje?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Último mensaje?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descartar (ráfaga)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Verificador anti-alucinación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memoria (Redis)": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscar_propiedades": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "guardar_precalificacion": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificador anti-alucinación": {
+      "main": [
+        [
+          {
+            "node": "¿Derivar o hardFail?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Derivar o hardFail?": {
+      "main": [
+        [
+          {
+            "node": "Nota al equipo + pausa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Partir en mensajes (≤250)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nota al equipo + pausa": {
+      "main": [
+        [
+          {
+            "node": "Partir en mensajes (≤250)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Partir en mensajes (≤250)": {
+      "main": [
+        [
+          {
+            "node": "Enviar de a uno",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar de a uno": {
+      "main": [
+        [
+          {
+            "node": "Fin (envío)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Typing… (simulado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Typing… (simulado)": {
+      "main": [
+        [
+          {
+            "node": "Pausa ~3s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa ~3s": {
+      "main": [
+        [
+          {
+            "node": "Enviar mensaje (simulado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar mensaje (simulado)": {
+      "main": [
+        [
+          {
+            "node": "Enviar de a uno",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionOrder": "v1"
+  }
+}
