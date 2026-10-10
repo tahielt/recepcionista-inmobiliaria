@@ -1,0 +1,9 @@
+{
+  "name": "recepcionista-inmobiliaria",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "node test/e2e/run.js"
+  },
+  "devDependencies": { "pg": "^8.13.0" }
+}

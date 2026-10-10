@@ -45,9 +45,36 @@ flowchart TD
 | 4 | **Verificador anti-alucinación** | Bloquea precios/links no respaldados por el catálogo |
 
 ## Stack
-n8n · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres/Supabase · Redis · WhatsApp (webhook)
+n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres/Supabase · Redis · WhatsApp (webhook)
 
-## Cómo probarlo
+## Probado en n8n (end-to-end)
+
+`test/e2e/run.js` importa este flujo en una n8n real (2.35), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **WhatsApp falso** que registra lo que se envía. Así se prueba el flujo, no la suerte del modelo.
+
+| Escenario | Qué verifica |
+|---|---|
+| Consulta | muestra solo propiedades del catálogo y guarda la precalificación |
+| Ráfaga | dos mensajes seguidos → el agente corre una vez y recibe los dos |
+| Precio inventado | el verificador bloquea "USD 150.000" sin respaldo, avisa al equipo y pausa la IA |
+| Precio alterado | bloquea "USD 25.000" cuando el catálogo dice 125.000 |
+| Pausa humana | `/ia off` silencia (ni llama al modelo), `/ia on` reactiva |
+| Visita | responde, deriva y pausa |
+| Presupuesto alto | más de USD 400.000 → deriva a un asesor |
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+npm install
+N8N_BIN="npx n8n" npm run test:e2e
+```
+
+### Lo que el test encontró en la v1 (y está arreglado en la v2)
+- **Los mensajes salían vacíos:** el envío leía `$json` de la respuesta del nodo "Typing" en vez del lote; ahora lee `$('Enviar de a uno').item`.
+- **El buffer perdía mensajes:** de una ráfaga solo procesaba el último. Ahora acumula en una lista de Redis y el agente recibe todo junto.
+- **El verificador dejaba pasar precios alterados:** buscaba los dígitos como substring de toda la evidencia, así que "25.000" pasaba porque está dentro de "125.000". Ahora usa [verificador-llm](https://github.com/tahielt/verificador-llm) con hechos armados desde las herramientas del turno (precio, expensas, ambientes, dormitorios, m², links, códigos).
+- **La pausa no se aplicaba a leads nuevos:** el `UPDATE` no hacía nada si el lead no existía todavía; ahora es un upsert.
+- **La derivación por presupuesto alto no existía:** el umbral (USD 400.000) está en "Normalizar entrada".
+
+## Cómo probarlo a mano
 1. Correr `data/schema.sql` y `data/seed_propiedades.sql` en la Postgres del stack (o Supabase).
 2. Importar `workflows/recepcionista-inmobiliaria.json` en n8n.
 3. Cargar las credenciales (Postgres/Supabase, Redis, OpenRouter) y seleccionarlas en los nodos.

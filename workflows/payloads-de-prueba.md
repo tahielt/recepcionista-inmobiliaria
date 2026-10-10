@@ -29,5 +29,4 @@ Mandá un mensaje que empuje al bot a tirar un precio que no está en el catálo
 El **Verificador anti-alucinación** bloquea la respuesta y responde
 "prefiero no pasarte un dato sin confirmarlo" + deja nota al equipo.
 
-> El verificador está probado de forma determinista en `../../..` (ver el registro del proyecto):
-> precio inventado → bloqueado; precio real del catálogo → pasa; link inventado → bloqueado.
+> Estos escenarios (y más) corren automáticamente en n8n con `npm run test:e2e`: ver README → "Probado en n8n".

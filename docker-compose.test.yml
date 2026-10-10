@@ -1,0 +1,12 @@
+# Postgres y Redis para el test end-to-end (datos sintéticos de data/).
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: demo, POSTGRES_PASSWORD: demo, POSTGRES_DB: inmo }
+    ports: ["5432:5432"]
+    volumes:
+      - ./data/schema.sql:/docker-entrypoint-initdb.d/1-schema.sql:ro
+      - ./data/seed_propiedades.sql:/docker-entrypoint-initdb.d/2-seed.sql:ro
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]

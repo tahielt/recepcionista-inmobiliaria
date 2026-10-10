@@ -1,5 +1,5 @@
 {
-  "name": "Recepcionista IA Inmobiliaria (demo)",
+  "name": "Recepcionista IA Inmobiliaria (demo) v2",
   "nodes": [
     {
       "id": "wa_in",
@@ -54,6 +54,12 @@
               "name": "nota_privada",
               "type": "string",
               "value": "={{ $json.body.nota_privada || '' }}"
+            },
+            {
+              "id": "a5",
+              "name": "umbral_usd",
+              "type": "number",
+              "value": 400000
             }
           ]
         },
@@ -286,7 +292,7 @@
       ],
       "parameters": {
         "promptType": "define",
-        "text": "={{ $('Normalizar entrada').item.json.texto }}",
+        "text": "={{ $('Buffer: juntar').item.json.mensajes.join('\\n') }}",
         "options": {
           "systemMessage": "Sos el recepcionista de WhatsApp de 'Inmobiliaria Demo' (Bariloche). Atendés en español rioplatense, cordial y breve.\n\nREGLAS DURAS:\n- NUNCA inventes propiedades, precios, direcciones ni links. Mostrá SOLO lo que devuelve la herramienta buscar_propiedades en este turno.\n- Si no hay resultados o no estás seguro, ofrecé que un asesor lo confirme. Jamás afirmes un precio que no viste en la herramienta.\n- Precalificá al lead de a poco: operación (compra/alquiler), zona, presupuesto en USD, ambientes, forma de pago y urgencia. Guardá lo que sepas con guardar_precalificacion (no pidas el session_id, lo pone el sistema) y NO vuelvas a preguntar lo ya respondido.\n- Derivá a un asesor humano si el cliente lo pide, o si quiere coordinar una visita, hacer una oferta o reservar.",
           "returnIntermediateSteps": true
@@ -335,7 +341,7 @@
         "descriptionType": "manual",
         "toolDescription": "Busca propiedades reales del catálogo por operación (venta/alquiler), zona y presupuesto máximo en USD. Usala SIEMPRE antes de mencionar cualquier propiedad, precio o link.",
         "operation": "executeQuery",
-        "query": "SELECT codigo, titulo, operacion, tipo, zona, ambientes, dormitorios, precio_usd, unidad_precio, url_ficha FROM propiedades WHERE activa AND ($1 = '' OR operacion = $1) AND ($2 = '' OR zona ILIKE '%' || $2 || '%') AND ($3 = 0 OR precio_usd <= $3) ORDER BY destacada DESC, precio_usd ASC LIMIT 3;",
+        "query": "SELECT codigo, titulo, operacion, tipo, zona, ambientes, dormitorios, m2_cubiertos, precio_usd, expensas_usd, unidad_precio, url_ficha FROM propiedades WHERE activa AND ($1 = '' OR operacion = $1) AND ($2 = '' OR zona ILIKE '%' || $2 || '%') AND ($3 = 0 OR precio_usd <= $3) ORDER BY destacada DESC, precio_usd ASC LIMIT 3;",
         "options": {
           "queryReplacement": "={{ [$fromAI('operacion', \"'venta' o 'alquiler'; vacío si no sabe\", 'string'), $fromAI('zona','barrio/zona de Bariloche; vacío si no sabe','string'), $fromAI('presupuesto_usd','presupuesto máximo en USD; 0 si no sabe','number')] }}"
         }
@@ -371,7 +377,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Patrón 4: ningún precio ni link puede salir si no está respaldado por una tool de ESTE turno.\nconst out = $json.output ?? $json.text ?? '';\nconst steps = $json.intermediateSteps ?? [];\nconst evidencia = JSON.stringify(steps);\nconst soloDigitos = (s) => (s || '').replace(/[^0-9]/g, '');\nconst evidenciaDigitos = soloDigitos(evidencia);\n\nconst precioRe = /(?:usd|u\\$s|us\\$|\\$)\\s*([0-9][0-9.,]{2,})/gi;\nconst linkRe = /https?:\\/\\/[^\\s)]+/gi;\n\nconst noRespaldados = [];\nlet m;\nwhile ((m = precioRe.exec(out)) !== null) {\n  const d = soloDigitos(m[1]);\n  if (d.length >= 3 && !evidenciaDigitos.includes(d)) noRespaldados.push('precio ' + m[0].trim());\n}\nfor (const l of (out.match(linkRe) || [])) {\n  if (!evidencia.includes(l)) noRespaldados.push('link ' + l);\n}\n\nconst hardFail = noRespaldados.length > 0;\nreturn {\n  session_id: $('Normalizar entrada').item.json.session_id,\n  hardFail,\n  motivo: hardFail ? ('Datos sin respaldo del catálogo: ' + noRespaldados.join('; ')) : '',\n  mensaje: hardFail\n    ? 'Disculpá, prefiero no pasarte un dato sin confirmarlo. Ya le aviso a un asesor para que te responda esto a la brevedad 🙏'\n    : out,\n  nota_equipo: hardFail ? ('⚠️ Verificador bloqueó la respuesta. ' + noRespaldados.join('; ')) : ''\n};"
+        "jsCode": "// verificador-llm (github.com/tahielt/verificador-llm) — copiado sin cambios, sin dependencias.\n// Verificador anti-alucinación para agentes de venta.\n// El texto que genera un LLM solo puede afirmar datos que salen de los hechos (base de datos, API, planilla).\n// Sin dependencias: corre en Node, en el Code node de n8n y en el navegador.\n\n/**\n * @typedef {{ valor: number, moneda?: 'USD' | 'ARS' }} Monto\n * @typedef {{ valor: number, unidad: string }} Cantidad\n * @typedef {{\n *   montos?: (Monto | number)[],   // precios y totales permitidos\n *   cantidades?: Cantidad[],       // m2, ambientes, dormitorios, baños, cocheras\n *   entidades?: string[],          // propiedades/productos de los que puede hablar esta respuesta\n *   catalogo?: string[],           // todos los nombres del catálogo (para detectar los que no corresponden)\n *   noDisponibles?: string[],      // vendidas, alquiladas o sin stock\n *   urls?: string[], contactos?: string[], fechas?: string[], codigos?: string[]\n * }} Hechos\n * @typedef {{ tipo: 'monto' | 'moneda' | 'cantidad' | 'url' | 'contacto' | 'entidad' | 'codigo' | 'disponibilidad' | 'promesa', detalle: string }} Problema\n */\n\n/** minúsculas y sin acentos, conservando el largo (los índices siguen sirviendo sobre el texto original) */\nconst plano = (s) => s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n\nconst URL = /https?:\\/\\/[^\\s)]+/g;\nconst EMAIL = /[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+/g;\nconst TELEFONO = /\\+?\\(?\\d[\\d\\s()-]{6,18}\\d/g;\nconst esTelefono = (s) => { const n = s.replace(/\\D/g, '').length; return n >= 8 && n <= 13 && /[\\s()-]|^\\+/.test(s) || n >= 10 && n <= 13; };\nconst CODIGO = /\\b[A-Z]{2,5}-\\d{2,6}\\b/g;\n\nconst UNIDADES = [\n  ['m2', /^\\s?(m2|m²|mts2|mt2|metros cuadrados|metros2)/],\n  ['ambientes', /^\\s?(ambientes?|amb\\b)/],\n  ['dormitorios', /^\\s?(dormitorios?|dorm\\b|habitaciones?|cuartos?)/],\n  ['banos', /^\\s?(banos?)\\b/],\n  ['cocheras', /^\\s?(cocheras?|garages?)\\b/],\n];\n\nconst FECHA = /\\b(\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|esta semana|la semana que viene|en \\d+ (?:dias|horas|hs))\\b/g;\nconst GARANTIA = /\\b(te garantizo|garantizad[oa]|100 ?% seguro|precio final|ultimo precio|te lo reservo|te la reservo|queda reservad[oa]|aceptan (?:la )?oferta)\\b/g;\nconst AFIRMA = /\\b(disponible|esta libre|sigue en venta|sigue disponible|se puede visitar|la tenemos|lo tenemos|hay stock)\\b/;\nconst NIEGA = /\\b(no (?:esta|hay|la|lo|sigue|se)|ya no|vendid[oa]|alquilad[oa]|reservad[oa]|sin (?:stock|disponibilidad))\\b/;\n\n/** \"250.000\" · \"250,000\" · \"1,5\" · \"1.5\" → número */\nfunction parsearNumero(s) {\n  if (/^\\d{1,3}([.,]\\d{3})+$/.test(s)) return Number(s.replace(/[.,]/g, ''));\n  if (/^\\d{1,3}(\\.\\d{3})+,\\d{1,2}$/.test(s)) return Number(s.replace(/\\./g, '').replace(',', '.'));\n  return Number(s.replace(',', '.'));\n}\n\n/** Busca montos y cantidades con su moneda o unidad. Los índices apuntan al texto recibido. */\nfunction extraerNumeros(texto) {\n  const t = plano(texto), out = [];\n  let hasta = 0;\n  for (const m of t.matchAll(/\\d+(?:[.,]\\d+)*/g)) {\n    if (m.index < hasta || /[a-z]/.test(t[m.index - 1] ?? '')) continue; // \"m2\", \"mt2\", o ya consumido\n    let inicio = m.index, fin = m.index + m[0].length, valor = parsearNumero(m[0]);\n    const prefijo = t.slice(Math.max(0, inicio - 5), inicio).match(/(usd|u\\$s|us\\$|u\\$d|\\$)\\s?$/);\n    let resto = t.slice(fin);\n    const mult = resto.match(/^\\s?(millones|millon|mil|k)\\b/);\n    if (mult) { valor *= mult[1] === 'mil' || mult[1] === 'k' ? 1e3 : 1e6; fin += mult[0].length; resto = t.slice(fin); }\n    const sufijo = resto.match(/^\\s?(?:de\\s)?(usd|u\\$s|dolares|dolar|pesos|ars)\\b/);\n    let moneda;\n    if (prefijo) { moneda = prefijo[1] === '$' ? 'ARS' : 'USD'; inicio -= prefijo[0].length; }\n    if (sufijo) { moneda = /^(pesos|ars)$/.test(sufijo[1]) ? 'ARS' : 'USD'; fin += sufijo[0].length; }\n    const u = !moneda && UNIDADES.find(([, re]) => re.test(resto));\n    if (u) fin += resto.match(u[1])[0].length;\n    hasta = fin;\n    const tipo = moneda || mult ? 'monto' : u ? 'cantidad' : 'numero';\n    out.push({ tipo, valor, moneda, unidad: u ? u[0] : undefined, inicio, fin, crudo: texto.slice(inicio, fin).trim() });\n  }\n  return out;\n}\n\nconst digitos = (s) => s.replace(/\\D/g, '').slice(-8);\nconst limpiarUrl = (u) => u.replace(/[).,!?]+$/, '');\n\n/** Saca links, mails y teléfonos (para no confundirlos con montos) y los devuelve aparte. */\nfunction separarContactos(texto) {\n  const hallados = { urls: [], emails: [], telefonos: [] };\n  const tapar = (re, lista, fn = (x) => x, valido = () => true) => (s) =>\n    s.replace(re, (x) => (valido(x) ? (lista.push(fn(x)), ' '.repeat(x.length)) : x));\n  const t = [tapar(URL, hallados.urls, limpiarUrl), tapar(EMAIL, hallados.emails), tapar(TELEFONO, hallados.telefonos, (x) => x.trim(), esTelefono)]\n    .reduce((s, f) => f(s), texto);\n  return { texto: t, ...hallados };\n}\n\n/**\n * @param {string} texto respuesta del LLM\n * @param {Hechos} hechos lo único que la respuesta puede afirmar\n * @returns {{ ok: boolean, problemas: Problema[] }}\n */\nfunction verificar(texto, hechos = {}) {\n  /** @type {Problema[]} */\n  const problemas = [];\n  const add = (tipo, detalle) => problemas.push({ tipo, detalle });\n  const { texto: sinContactos, urls, emails, telefonos } = separarContactos(texto);\n  const t = plano(sinContactos);\n\n  const montos = (hechos.montos ?? []).map((m) => (typeof m === 'number' ? { valor: m } : m));\n  for (const n of extraerNumeros(sinContactos)) {\n    if (n.tipo === 'monto') {\n      const mismo = montos.filter((m) => Math.abs(m.valor - n.valor) < 0.5);\n      if (!mismo.length) add('monto', `\"${n.crudo}\" no sale de los datos`);\n      else if (n.moneda && mismo.every((m) => m.moneda && m.moneda !== n.moneda)) add('moneda', `\"${n.crudo}\" está en ${mismo[0].moneda}, no en ${n.moneda}`);\n    } else if (n.tipo === 'cantidad' && !(hechos.cantidades ?? []).some((c) => c.unidad === n.unidad && c.valor === n.valor)) {\n      add('cantidad', `\"${n.crudo}\" no sale de los datos`);\n    }\n  }\n\n  const urlsOk = new Set((hechos.urls ?? []).map(limpiarUrl));\n  for (const u of urls) if (!urlsOk.has(u)) add('url', `link no generado por el sistema: ${u}`);\n  const contactosOk = new Set((hechos.contactos ?? []).map((c) => (c.includes('@') ? c.toLowerCase() : digitos(c))));\n  for (const e of emails) if (!contactosOk.has(e.toLowerCase())) add('contacto', `mail no provisto: ${e}`);\n  for (const f of telefonos) if (!contactosOk.has(digitos(f))) add('contacto', `teléfono no provisto: ${f}`);\n  const codigosOk = new Set(hechos.codigos ?? []);\n  for (const c of sinContactos.match(CODIGO) ?? []) if (!codigosOk.has(c)) add('codigo', `código inexistente en la consulta: ${c}`);\n\n  const permitidas = new Set((hechos.entidades ?? []).map(plano));\n  for (const e of hechos.catalogo ?? []) {\n    if (!permitidas.has(plano(e)) && t.includes(plano(e))) add('entidad', `menciona \"${e}\", que no corresponde a esta consulta`);\n  }\n  const oraciones = t.split(/[.!?\\n]+/);\n  for (const e of hechos.noDisponibles ?? []) {\n    const p = plano(e);\n    if (oraciones.some((o) => o.includes(p) && AFIRMA.test(o) && !NIEGA.test(o))) add('disponibilidad', `presenta como disponible \"${e}\"`);\n  }\n\n  const fechasOk = new Set((hechos.fechas ?? []).map(plano));\n  for (const m of t.matchAll(FECHA)) if (!fechasOk.has(m[1])) add('promesa', `promete fecha o plazo: \"${m[1]}\"`);\n  for (const m of t.matchAll(GARANTIA)) add('promesa', `compromiso que el agente no puede tomar: \"${m[1]}\"`);\n\n  return { ok: problemas.length === 0, problemas };\n}\n\n/** Texto para reintentar UNA vez con el LLM antes de pasar a plantilla o a una persona. */\nfunction feedback(problemas) {\n  return 'Tu respuesta anterior tenía estos errores:\\n' + problemas.map((p) => `- ${p.detalle}`).join('\\n') +\n    '\\nReescribila usando SOLO los datos provistos. Si un dato no está, decí que lo consultás. Escribí los números con dígitos.';\n}\n\n// ── Voz: se verifica el TEXTO y recién después se convierte para TTS ─────────\nconst U = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince',\n  'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco',\n  'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'];\nconst D = ['', '', '', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];\nconst C = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];\nconst apocope = (s) => s.replace(/veintiuno$/, 'veintiún').replace(/uno$/, 'un');\n\nfunction menosDeMil(n) {\n  if (n === 100) return 'cien';\n  const r = n % 100;\n  const decenas = r < 30 ? (r ? U[r] : '') : D[Math.floor(r / 10)] + (r % 10 ? ' y ' + U[r % 10] : '');\n  return [C[Math.floor(n / 100)], decenas].filter(Boolean).join(' ');\n}\n\n/** 250000 → \"doscientos cincuenta mil\" (hasta 999.999.999) */\nfunction enPalabras(n) {\n  if (!Number.isInteger(n)) {\n    const [e, d] = String(n).split('.');\n    return `${enPalabras(Number(e))} coma ${[...d].map((x) => U[Number(x)]).join(' ')}`;\n  }\n  if (n === 0) return 'cero';\n  const millones = Math.floor(n / 1e6), miles = Math.floor(n / 1e3) % 1000, resto = n % 1000;\n  return [\n    millones && (millones === 1 ? 'un millón' : `${apocope(enPalabras(millones))} millones`),\n    miles && (miles === 1 ? 'mil' : `${apocope(menosDeMil(miles))} mil`),\n    resto && menosDeMil(resto),\n  ].filter(Boolean).join(' ');\n}\n\nconst NOMBRES = {\n  USD: ['dólar', 'dólares'], ARS: ['peso', 'pesos'], m2: ['metro cuadrado', 'metros cuadrados'], ambientes: ['ambiente', 'ambientes'],\n  dormitorios: ['dormitorio', 'dormitorios'], banos: ['baño', 'baños'], cocheras: ['cochera', 'cocheras', 'f'],\n};\n\n/**\n * Prepara un texto YA VERIFICADO para TTS: números y unidades como se dicen; links, mails y teléfonos\n * salen de la voz y se devuelven en `aparte` para mandarlos por escrito.\n */\nfunction paraVoz(texto) {\n  const { urls, emails, telefonos } = separarContactos(texto);\n  let t = texto\n    .replace(URL, (u) => 'el link que te paso por escrito' + u.slice(limpiarUrl(u).length))\n    .replace(EMAIL, 'el mail que te paso por escrito')\n    .replace(TELEFONO, (x) => (esTelefono(x) ? 'el número que te paso por escrito' : x))\n    .replace(/\\b(al|del) el (link|mail|número)/gi, '$1 $2');\n  for (const n of extraerNumeros(t).reverse()) {\n    const [singular, plural, genero] = NOMBRES[n.moneda ?? n.unidad] ?? [];\n    const numero = genero === 'f' ? enPalabras(n.valor).replace(/uno$/, 'una') : apocope(enPalabras(n.valor));\n    const palabras = singular ? `${numero} ${n.valor === 1 ? singular : plural}` : enPalabras(n.valor);\n    t = t.slice(0, n.inicio) + (t[n.inicio] === ' ' ? ' ' : '') + palabras + t.slice(n.fin);\n  }\n  return { voz: t.replace(/\\s{2,}/g, ' ').trim(), aparte: [...urls, ...emails, ...telefonos] };\n}\n\n// ── Wrapper del flujo ────────────────────────────────────────────────────────\n// Evidencia = lo que devolvieron las herramientas en este turno (intermediateSteps).\nconst salida = $json.output ?? $json.text ?? '';\nconst entrada = $('Normalizar entrada').item.json;\nconst cliente = $('Buffer: juntar').item.json.mensajes.join('\\n');\nconst filas = [], presupuestos = [];\nconst juntar = (v) => {\n  if (typeof v === 'string') { try { return juntar(JSON.parse(v)); } catch { return; } }\n  if (Array.isArray(v)) return v.forEach(juntar);\n  if (v && typeof v === 'object' && v.codigo) filas.push(v);\n};\nfor (const paso of $json.intermediateSteps ?? []) {\n  juntar(paso.observation);\n  const p = Number(paso.action?.toolInput?.presupuesto_usd);\n  if (p) presupuestos.push(p);\n}\nconst hechos = {\n  montos: filas.flatMap((f) => [f.precio_usd, f.expensas_usd].filter((v) => v != null).map((valor) => ({ valor: Number(valor), moneda: 'USD' }))),\n  cantidades: filas.flatMap((f) => [['ambientes', f.ambientes], ['dormitorios', f.dormitorios], ['m2', f.m2_cubiertos]]\n    .filter(([, v]) => v != null).map(([unidad, valor]) => ({ unidad, valor: Number(valor) }))),\n  urls: filas.map((f) => f.url_ficha), codigos: filas.map((f) => f.codigo), entidades: filas.map((f) => f.titulo),\n};\nconst r = verificar(salida, hechos);\nconst umbral = Number(entrada.umbral_usd ?? 400000);\nconst alto = presupuestos.find((p) => p > umbral);\nconst pideHumano = /asesor|humano|visita|visitar|oferta|reservar/i.test(cliente);\nconst motivo = !r.ok ? 'Verificador bloqueó la respuesta: ' + r.problemas.map((x) => x.detalle).join('; ')\n  : alto ? `Presupuesto USD ${alto} supera el umbral de USD ${umbral}`\n  : pideHumano ? 'Derivación por intención del cliente (visita/oferta/asesor)' : '';\nreturn {\n  session_id: entrada.session_id,\n  hardFail: !r.ok,\n  derivar: Boolean(motivo),\n  tipo_evento: !r.ok ? 'hard_fail' : 'derivacion',\n  motivo,\n  problemas: r.problemas,\n  mensaje: r.ok ? salida : 'Disculpá, prefiero no pasarte un dato sin confirmarlo. Ya le aviso a un asesor para que te responda a la brevedad 🙏',\n};\n"
       }
     },
     {
@@ -394,21 +400,12 @@
           "conditions": [
             {
               "id": "cd1",
-              "leftValue": "={{ $json.hardFail }}",
+              "leftValue": "={{ $json.derivar }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
                 "operation": "true",
                 "singleValue": true
-              }
-            },
-            {
-              "id": "cd2",
-              "leftValue": "={{ $('Normalizar entrada').item.json.texto }}",
-              "rightValue": "asesor|humano|visita|visitar|oferta|reservar",
-              "operator": {
-                "type": "string",
-                "operation": "regex"
               }
             }
           ],
@@ -427,9 +424,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO eventos_equipo (session_id, tipo, detalle) VALUES ($1, $2, $3); UPDATE leads SET ia_activa = false, derivado = true, updated_at = now() WHERE session_id = $1;",
+        "query": "INSERT INTO eventos_equipo (session_id, tipo, detalle) VALUES ($1, $2, $3); INSERT INTO leads (session_id, ia_activa, derivado, updated_at) VALUES ($1, false, true, now()) ON CONFLICT (session_id) DO UPDATE SET ia_activa = false, derivado = true, updated_at = now();",
         "options": {
-          "queryReplacement": "={{ [$json.session_id, ($json.hardFail ? 'hard_fail' : 'derivacion'), ($json.motivo || 'Derivación por intención del cliente (visita/oferta/asesor)')] }}"
+          "queryReplacement": "={{ [$json.session_id, $json.tipo_evento, $json.motivo] }}"
         }
       }
     },
@@ -488,7 +485,7 @@
         "url": "https://chatwoot.example/api/typing",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { session_id: $json.session_id, status: 'typing_on' } }}",
+        "jsonBody": "={{ { session_id: $('Enviar de a uno').item.json.session_id, status: 'typing_on' } }}",
         "options": {}
       }
     },
@@ -523,9 +520,56 @@
         "url": "https://chatwoot.example/api/messages",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { session_id: $json.session_id, text: $json.parte } }}",
+        "jsonBody": "={{ { session_id: $('Enviar de a uno').item.json.session_id, text: $('Enviar de a uno').item.json.parte } }}",
         "options": {}
       }
+    },
+    {
+      "parameters": {
+        "operation": "push",
+        "list": "={{ 'buf:' + $('Normalizar entrada').item.json.session_id }}",
+        "messageData": "={{ $('Normalizar entrada').item.json.texto }}",
+        "tail": true
+      },
+      "name": "Buffer: acumular",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        280,
+        560
+      ],
+      "id": "buf-acumular"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'buf:' + $('Normalizar entrada').item.json.session_id }}",
+        "keyType": "list",
+        "propertyName": "mensajes",
+        "options": {}
+      },
+      "name": "Buffer: juntar",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        940,
+        500
+      ],
+      "id": "buf-juntar"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ 'buf:' + $('Normalizar entrada').item.json.session_id }}"
+      },
+      "name": "Buffer: limpiar",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        500
+      ],
+      "id": "buf-limpiar"
     }
   ],
   "connections": {
@@ -602,7 +646,7 @@
         ],
         [
           {
-            "node": "Buffer: marcar",
+            "node": "Buffer: acumular",
             "type": "main",
             "index": 0
           }
@@ -646,7 +690,7 @@
       "main": [
         [
           {
-            "node": "AI Agent",
+            "node": "Buffer: juntar",
             "type": "main",
             "index": 0
           }
@@ -811,6 +855,39 @@
         [
           {
             "node": "Enviar de a uno",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buffer: acumular": {
+      "main": [
+        [
+          {
+            "node": "Buffer: marcar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buffer: juntar": {
+      "main": [
+        [
+          {
+            "node": "Buffer: limpiar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buffer: limpiar": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
             "type": "main",
             "index": 0
           }
