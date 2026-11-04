@@ -3,7 +3,8 @@
 El flujo recibe el webhook de Chatwoot (`message_created`). Para probarlo sin WhatsApp, mandá
 estos JSON con curl a la URL del webhook. Son el formato real de Chatwoot, recortado a los
 campos que usa el flujo. Para que la respuesta llegue, `conversation.id` tiene que ser una
-conversación existente en tu Chatwoot.
+conversación existente en tu Chatwoot, y `inbox.id` el inbox de un cliente activo
+(`npm run clientes`): si no, el flujo ignora el mensaje.
 
 ```bash
 curl -X POST https://TU-N8N/webhook/wa-recepcionista -H 'Content-Type: application/json' -d @mensaje.json

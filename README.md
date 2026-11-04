@@ -20,8 +20,10 @@ un asesor" + avisa al equipo. Eso es lo que se ve en el video.
 ```mermaid
 flowchart TD
     WA[WhatsApp → Evolution → Chatwoot<br/>webhook message_created] --> IG{¿mensaje del cliente<br/>o comando /ia?}
-    IG -- "eco, otro inbox, actividad" --> END0([ignorar])
-    IG -- "sí" --> NP{¿Nota privada<br/>/ia on|off?}
+    IG -- "eco, bot de Evolution, actividad" --> END0([ignorar])
+    IG -- "sí" --> CL{¿inbox de un<br/>cliente activo?}
+    CL -- "no" --> END4([ignorar])
+    CL -- "sí: nombre, umbral,<br/>asesor, prompt_extra" --> NP{¿Nota privada<br/>/ia on|off?}
     NP -- "comando" --> SET[Set ia_activa en leads] --> END1([fin])
     NP -- "mensaje" --> PH{ia_activa?}
     PH -- "false (humano activo)" --> END2([fin: IA en pausa])
@@ -59,11 +61,18 @@ Usa ~1,6 GB de RAM en reposo, así que entra en una PC de 8 GB.
 
 ```bash
 npm install
-npm run instalar   # idempotente: stack, base, webhook, WhatsApp, flujo de n8n y QR
+npm run instalar                         # idempotente: stack, base, webhook y flujo de n8n
+npm run nuevo-cliente -- "Inmobiliaria"  # WhatsApp + inbox + cliente, y muestra el QR
+npm run importar -- propiedades.csv --cliente 1
 ```
 
 Lo único manual: crear el admin de Chatwoot, pegar 2 tokens en `.env` (Chatwoot y OpenRouter) y
-escanear el QR. El script te dice cuándo.
+escanear el QR de cada inmobiliaria. Los scripts te dicen cuándo.
+
+**Multi-cliente:** una instalación atiende a N inmobiliarias. El flujo identifica a cada una por
+el inbox de Chatwoot (tabla `clientes`). Cada una tiene su catálogo, sus leads, su umbral de
+derivación, el teléfono de su asesor y un `prompt_extra` con su tono y sus horarios. Un inbox sin
+cliente activo se ignora.
 
 ## Probado en n8n (end-to-end)
 
@@ -80,6 +89,9 @@ escanear el QR. El script te dice cuándo.
 | Presupuesto alto | más de USD 400.000 → deriva a un asesor |
 | Eco | ignora los mensajes y notas que salen de Chatwoot (incluidos los del propio bot) |
 | Bot de Evolution | ignora la conversación con "EvolutionAPI", donde Evolution manda el QR y el estado de la conexión |
+| Multi-cliente | cada inmobiliaria ve solo su catálogo y usa su umbral y su `prompt_extra` |
+| Mismo WhatsApp, dos inmobiliarias | dos leads separados, y la memoria de la conversación no pasa de una a otra |
+| Inbox sin cliente | un inbox sin cliente, o con el cliente inactivo, se ignora |
 | Autenticación | todas las llamadas a la API de Chatwoot llevan `api_access_token` |
 
 ```bash
@@ -97,17 +109,18 @@ hace falta instalar n8n. El test usa sus propios Postgres y Redis (`docker-compo
 - **El buffer perdía mensajes:** de una ráfaga solo procesaba el último. Ahora acumula en una lista de Redis y el agente recibe todo junto.
 - **El verificador dejaba pasar precios alterados:** buscaba los dígitos como substring de toda la evidencia, así que "25.000" pasaba porque está dentro de "125.000". Ahora usa [verificador-llm](https://github.com/tahielt/verificador-llm) con hechos armados desde las herramientas del turno (precio, expensas, ambientes, dormitorios, m², links, códigos).
 - **La pausa no se aplicaba a leads nuevos:** el `UPDATE` no hacía nada si el lead no existía todavía; ahora es un upsert.
-- **La derivación por presupuesto alto no existía:** el umbral (USD 400.000) está en "Normalizar entrada".
+- **La derivación por presupuesto alto no existía:** ahora cada inmobiliaria tiene su umbral (`clientes.umbral_usd`, 400.000 por defecto).
 
 ## Ponerlo en producción
 Paso a paso (stack, base, Evolution, Chatwoot, credenciales, webhook y túnel): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
 Para probar el webhook a mano sin WhatsApp: `workflows/payloads-de-prueba.md`.
 
 ## Datos
-- `data/schema.sql`: tablas `propiedades`, `leads` y `eventos_equipo`.
+- `data/schema.sql` + `data/migraciones/`: tablas `clientes`, `propiedades`, `leads` y `eventos_equipo`.
+  Propiedades, leads y eventos llevan `cliente_id`. Las migraciones son idempotentes y no borran datos.
 - `data/seed_propiedades.sql`: 20 propiedades sintéticas de Bariloche para la demo.
 - `data/plantilla-propiedades.csv`: la planilla que completa la inmobiliaria. Se carga con
-  `npm run importar -- archivo.csv --desactivar-faltantes`, que valida todo antes de escribir.
+  `npm run importar -- archivo.csv --cliente <id> --desactivar-faltantes`, que valida todo antes de escribir.
 
 ---
 🎥 Video (60-90 s): _pendiente_ · Parte del [portfolio de automatización n8n](https://github.com/tahielt).

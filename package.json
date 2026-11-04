@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "instalar": "node scripts/instalar.js",
-    "test:e2e": "node test/e2e/run.js",
-    "importar": "node scripts/importar-propiedades.js"
+    "nuevo-cliente": "node scripts/nuevo-cliente.js",
+    "clientes": "node scripts/clientes.js",
+    "importar": "node scripts/importar-propiedades.js",
+    "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {
     "pg": "^8.13.0",

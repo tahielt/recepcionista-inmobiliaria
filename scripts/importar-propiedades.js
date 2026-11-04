@@ -1,14 +1,17 @@
 // Carga el catálogo real de una inmobiliaria desde un CSV (p. ej. exportado de Google Sheets).
-// Uso: DATABASE_URL=postgres://user:pass@host:5432/db node scripts/importar-propiedades.js propiedades.csv [--desactivar-faltantes]
-//   · Hace upsert por `codigo`: si la propiedad existe la actualiza, si no la crea.
-//   · --desactivar-faltantes: las propiedades que ya no están en el CSV quedan activa=false (vendidas, bajadas).
+// Uso: npm run importar -- propiedades.csv --cliente <id> [--desactivar-faltantes]
+//   · Se conecta a la base inmo del stack con los datos de .env (o a DATABASE_URL si está definida).
+//   · Hace upsert por (cliente, código): si la propiedad existe la actualiza, si no la crea.
+//   · --desactivar-faltantes: las propiedades del cliente que ya no están en el CSV quedan activa=false (vendidas, bajadas).
 //   · Si alguna fila tiene errores no escribe nada y lista qué corregir.
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
+import { conexionInmo } from './lib.js';
 
 const [archivo, ...flags] = process.argv.slice(2);
-if (!archivo) {
-  console.error('Uso: node scripts/importar-propiedades.js propiedades.csv [--desactivar-faltantes]');
+const clienteId = Number(flags[flags.indexOf('--cliente') + 1]);
+if (!archivo || !flags.includes('--cliente') || !Number.isInteger(clienteId)) {
+  console.error('Uso: npm run importar -- propiedades.csv --cliente <id> [--desactivar-faltantes]');
   process.exit(1);
 }
 
@@ -78,25 +81,30 @@ if (errores.length) {
   process.exit(1);
 }
 
-const db = new pg.Client(process.env.DATABASE_URL ? { connectionString: process.env.DATABASE_URL } : {});
+const db = new pg.Client(conexionInmo());
 await db.connect();
-const COLS = Object.keys(props[0] ?? { codigo: 0 });
+const { rows: [cliente] } = await db.query('SELECT nombre FROM clientes WHERE id = $1', [clienteId]);
+if (!cliente) {
+  console.error(`✗ No existe el cliente ${clienteId}. Mirá los ids con: npm run clientes`);
+  process.exit(1);
+}
+const COLS = ['cliente_id', ...Object.keys(props[0] ?? { codigo: 0 })];
 try {
   await db.query('BEGIN');
   for (const p of props) {
     await db.query(
       `INSERT INTO propiedades (${COLS.join(', ')}) VALUES (${COLS.map((_, i) => '$' + (i + 1)).join(', ')})
-       ON CONFLICT (codigo) DO UPDATE SET ${COLS.filter((c) => c !== 'codigo').map((c) => `${c} = EXCLUDED.${c}`).join(', ')}`,
-      COLS.map((c) => p[c]),
+       ON CONFLICT (cliente_id, codigo) DO UPDATE SET ${COLS.filter((c) => !['cliente_id', 'codigo'].includes(c)).map((c) => `${c} = EXCLUDED.${c}`).join(', ')}`,
+      COLS.map((c) => (c === 'cliente_id' ? clienteId : p[c])),
     );
   }
   let bajas = 0;
   if (flags.includes('--desactivar-faltantes')) {
-    bajas = (await db.query('UPDATE propiedades SET activa = false WHERE activa AND NOT (codigo = ANY($1))', [props.map((p) => p.codigo)])).rowCount;
+    bajas = (await db.query('UPDATE propiedades SET activa = false WHERE cliente_id = $1 AND activa AND NOT (codigo = ANY($2))', [clienteId, props.map((p) => p.codigo)])).rowCount;
   }
   await db.query('COMMIT');
-  const { rows } = await db.query('SELECT count(*)::int AS n FROM propiedades WHERE activa');
-  console.log(`✓ ${props.length} propiedades importadas${bajas ? `, ${bajas} desactivadas` : ''} · ${rows[0].n} activas en el catálogo`);
+  const { rows } = await db.query('SELECT count(*)::int AS n FROM propiedades WHERE cliente_id = $1 AND activa', [clienteId]);
+  console.log(`✓ ${cliente.nombre}: ${props.length} propiedades importadas${bajas ? `, ${bajas} desactivadas` : ''} · ${rows[0].n} activas en su catálogo`);
 } catch (e) {
   await db.query('ROLLBACK');
   console.error('✗ Error, no se guardó nada:', e.message);

@@ -14,7 +14,10 @@ function decidir(body) {
   const iUser = msgs.findLastIndex((m) => m.role === 'user');
   const user = texto(msgs[iUser]?.content);
   const resultados = msgs.slice(iUser + 1).filter((m) => m.role === 'tool').map((m) => texto(m.content));
-  pedidos.push({ user, herramientas: (body.tools ?? []).map((t) => t.function.name), conResultados: resultados.length > 0 });
+  pedidos.push({
+    user, herramientas: (body.tools ?? []).map((t) => t.function.name), conResultados: resultados.length > 0,
+    system: texto(msgs.find((m) => m.role === 'system')?.content), historial: msgs.slice(0, iUser).map((m) => texto(m.content)).join(' | '),
+  });
 
   if (!resultados.length) {
     if (/aproximado/i.test(user)) return { content: 'Por esa zona las casas rondan los USD 150.000. ¿Te interesa que veamos opciones?' };

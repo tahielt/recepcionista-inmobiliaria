@@ -3,7 +3,7 @@
 // Los mensajes entran con el formato real del webhook de Chatwoot (message_created).
 // Uso: N8N_BIN=/ruta/a/n8n node test/e2e/run.js [workflow.json]
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,11 +34,30 @@ const wa = createServer((req, res) => {
   });
 });
 
+// ── Base: esquema, migraciones y las inmobiliarias de prueba ─────────────────
+// 1 = la del seed (inbox 3) · 2 = otra con su catálogo y umbral (inbox 4) · 3 = inactiva (inbox 5). El inbox 99 no tiene cliente.
+async function prepararBase() {
+  await db.query(readFileSync('data/schema.sql', 'utf8'));
+  for (const f of readdirSync('data/migraciones').sort()) await db.query(readFileSync(`data/migraciones/${f}`, 'utf8'));
+  await db.query(`INSERT INTO clientes (id, nombre, inbox_id, umbral_usd, prompt_extra, activo) VALUES
+      (1, 'Inmobiliaria Demo', 3, 400000, 'Inmobiliaria de Bariloche.', true),
+      (2, 'Inmobiliaria Sur', 4, 150000, 'HORARIO-SUR: lunes a viernes de 9 a 18.', true),
+      (3, 'Inmobiliaria Inactiva', 5, 400000, '', false)
+    ON CONFLICT (id) DO UPDATE SET nombre = EXCLUDED.nombre, inbox_id = EXCLUDED.inbox_id, umbral_usd = EXCLUDED.umbral_usd,
+      prompt_extra = EXCLUDED.prompt_extra, activo = EXCLUDED.activo`);
+  await db.query(`SELECT setval(pg_get_serial_sequence('clientes', 'id'), (SELECT max(id) FROM clientes))`);
+  await db.query(`INSERT INTO propiedades (cliente_id, codigo, titulo, operacion, tipo, zona, ambientes, dormitorios, m2_cubiertos, precio_usd, unidad_precio, url_ficha) VALUES
+      (2, 'SUR-001', 'Depto 2 ambientes, Centro (Sur)', 'venta', 'departamento', 'Centro', 2, 1, 45, 140000, 'venta_total', 'https://sur.example/SUR-001'),
+      (2, 'SUR-002', 'Cabaña en alquiler, Melipal (Sur)', 'alquiler', 'cabaña', 'Melipal', 3, 2, 70, 700, 'alquiler_mensual', 'https://sur.example/SUR-002')
+    ON CONFLICT (cliente_id, codigo) DO NOTHING`);
+}
+
 // ── Preparar n8n: credenciales de prueba, flujo apuntando a los mocks ────────
 const carpeta = mkdtempSync(join(tmpdir(), 'n8n-e2e-'));
 const env = {
   ...process.env, N8N_USER_FOLDER: carpeta, N8N_PORT: String(PUERTOS.n8n), N8N_LISTEN_ADDRESS: process.env.N8N_LISTEN_ADDRESS ?? '0.0.0.0',
   N8N_DIAGNOSTICS_ENABLED: 'false', N8N_SECURE_COOKIE: 'false', N8N_ENCRYPTION_KEY: 'e2e-solo-pruebas',
+  CHATWOOT_URL: `http://127.0.0.1:${PUERTOS.wa}`, N8N_BLOCK_ENV_ACCESS_IN_NODE: 'false',
 };
 const CREDS = {
   postgres: { id: 'cred-pg', name: 'Postgres (e2e)', data: { host: PG.host, port: PG.port, database: PG.database, user: PG.user, password: PG.password, ssl: 'disable' } },
@@ -47,7 +66,7 @@ const CREDS = {
   httpHeaderAuth: { id: 'cred-cw', name: 'Chatwoot API (e2e)', data: { name: 'api_access_token', value: 'token-e2e' } },
 };
 function prepararFlujo() {
-  const wf = JSON.parse(readFileSync(archivo, 'utf8').replaceAll('https://chatwoot.example', `http://127.0.0.1:${PUERTOS.wa}`));
+  const wf = JSON.parse(readFileSync(archivo, 'utf8'));
   return { ...asignarCredenciales(wf, CREDS), id: 'recepcionistaE2E', active: false };
 }
 
@@ -87,8 +106,8 @@ function payload(c, texto, tipo = 'cliente') {
     event: 'message_created', id: 9000000 + ++mid, content: texto, created_at: new Date().toISOString(),
     message_type: tipo === 'cliente' ? 'incoming' : 'outgoing', private: tipo === 'nota' || tipo === 'eco-nota',
     content_type: 'text', attachments: [], sender: tipo === 'cliente' ? cliente : ASESOR,
-    account: { id: 1, name: 'Inmobiliaria Demo' }, inbox: { id: 3, name: 'WhatsApp Demo' },
-    conversation: { id: c.conv, inbox_id: 3, status: 'open', meta: { sender: cliente }, contact_inbox: { source_id: c.tel.slice(1) } },
+    account: { id: 1, name: 'Cuenta' }, inbox: { id: c.inbox ?? 3, name: 'WhatsApp' },
+    conversation: { id: c.conv, inbox_id: c.inbox ?? 3, status: 'open', meta: { sender: cliente }, contact_inbox: { source_id: c.tel.slice(1) } },
   };
 }
 const sid = (c) => 'wa:' + c.tel.replace(/\D/g, '');
@@ -146,6 +165,33 @@ const ESCENARIOS = [
       ['no llama al modelo', c.llm.length === 0, c.llm.map((p) => p.user).join(' | ')],
       ['no responde ni escribe', c.enviados.length === 0, JSON.stringify(c.enviados)],
     ] },
+  { nombre: 'Multi-cliente: cada inmobiliaria muestra su catálogo, con su umbral y su prompt', c: { ...contacto(), inbox: 4, cliente: 2 },
+    pasos: [[0, 'Buenas, busco depto en venta en el Centro hasta 200 mil dólares']],
+    chequear: (c) => [
+      ['muestra el catálogo de su inmobiliaria', /SUR-001/.test(c.texto), c.texto],
+      ['no muestra propiedades de otra inmobiliaria', !/LCB-/.test(c.texto), c.texto],
+      ['deriva con su umbral (USD 150.000; la otra no deriva con 200.000)', c.eventos.some((e) => e.tipo === 'derivacion' && /150000/.test(e.detalle)), JSON.stringify(c.eventos)],
+      ['el system prompt trae su prompt_extra', c.llm.length > 0 && c.llm.every((p) => /HORARIO-SUR/.test(p.system) && /Inmobiliaria Sur/.test(p.system)), c.llm.map((p) => p.system).join(' | ')],
+    ] },
+  (() => { // el mismo WhatsApp le escribe a las dos inmobiliarias
+    const a = contacto(), b = { ...contacto(), tel: a.tel, inbox: 4, cliente: 2 };
+    return { nombre: 'Multi-cliente: el mismo WhatsApp en dos inmobiliarias no mezcla leads ni memoria', c: b,
+      pasos: [[0, 'Consulto: busco depto en venta en Belgrano', 'cliente', a], [12000, 'Consulto: tenés alquileres en Melipal?']],
+      chequear: (c) => [
+        ['un lead por inmobiliaria, cada uno con lo suyo', c.leads.length === 2 && c.leads.find((l) => l.cliente_id === 1)?.zona === 'Belgrano' && c.leads.find((l) => l.cliente_id === 2)?.zona === 'Melipal', JSON.stringify(c.leads)],
+        ['responde con el catálogo de la segunda', /SUR-002/.test(c.texto) && !/LCB-/.test(c.texto), c.texto],
+        ['la memoria de la conversación no pasa de una a otra', c.llm.some((p) => /Melipal/.test(p.user)) && !c.llm.some((p) => /Melipal/.test(p.user) && /Belgrano/.test(p.historial)), c.llm.map((p) => p.historial).join(' || ')],
+      ] };
+  })(),
+  (() => {
+    const sinCliente = { ...contacto(), inbox: 99 }, inactivo = { ...contacto(), inbox: 5 };
+    return { nombre: 'Multi-cliente: un inbox sin cliente o con el cliente inactivo se ignora', c: sinCliente,
+      pasos: [[0, 'busco depto en venta en el Centro INBOX99'], [0, 'busco depto en venta en el Centro INACTIVO', 'cliente', inactivo]],
+      chequear: (c) => [
+        ['no llama al modelo', c.llm.length === 0, c.llm.map((p) => p.user).join(' | ')],
+        ['no responde ni escribe', !enviados.some((x) => [sinCliente.conv, inactivo.conv].includes(x.conv)), JSON.stringify(c.enviados)],
+      ] };
+  })(),
   { nombre: 'Bot de Evolution: ignora el QR y el estado de la conexión', c: { ...contacto(), tel: '+123456' },
     pasos: [[0, 'QRCode generated BOTQR1']],
     chequear: (c) => [
@@ -155,10 +201,10 @@ const ESCENARIOS = [
 ];
 
 async function correrEscenario(e) {
-  for (const [espera, texto, tipo] of e.pasos) {
+  for (const [espera, texto, tipo, c = e.c] of e.pasos) {
     await dormir(espera);
     const r = await fetch(`http://127.0.0.1:${PUERTOS.n8n}/webhook/wa-recepcionista`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(e.c, texto, tipo)),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(c, texto, tipo)),
     });
     if (!r.ok) throw new Error(`webhook ${r.status}: ${await r.text()}`);
   }
@@ -191,6 +237,7 @@ const db = new pg.Client(PG);
 let n8n;
 try {
   await db.connect();
+  await prepararBase();
   const llm = await iniciarLLM(PUERTOS.llm);
   await new Promise((r) => wa.listen(PUERTOS.wa, r));
   importar();
@@ -209,8 +256,9 @@ try {
       enviados: propios,
       texto: mensajes.filter((x) => !x.private).map((x) => x.content).join('\n'),
       notas: mensajes.filter((x) => x.private).map((x) => x.content).join('\n'),
-      lead: (await db.query('SELECT * FROM leads WHERE session_id = $1', [sid(e.c)])).rows[0],
-      eventos: (await db.query('SELECT tipo, detalle FROM eventos_equipo WHERE session_id = $1', [sid(e.c)])).rows,
+      lead: (await db.query('SELECT * FROM leads WHERE cliente_id = $1 AND session_id = $2', [e.c.cliente ?? 1, sid(e.c)])).rows[0],
+      leads: (await db.query('SELECT * FROM leads WHERE session_id = $1', [sid(e.c)])).rows,
+      eventos: (await db.query('SELECT tipo, detalle FROM eventos_equipo WHERE cliente_id = $1 AND session_id = $2', [e.c.cliente ?? 1, sid(e.c)])).rows,
       llm: pedidos.filter((p) => [...usados].some((u) => p.user.includes(u))),
     };
     console.log(e.nombre);

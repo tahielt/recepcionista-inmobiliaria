@@ -9,11 +9,15 @@ Cliente (WhatsApp) → Evolution API → Chatwoot → webhook n8n → agente →
 Chatwoot es el inbox del equipo: el asesor ve todo desde la app del celular, toma la
 conversación cuando quiere y el bot le deja notas privadas cuando deriva.
 
+Una sola instalación atiende a varias inmobiliarias. Cada una tiene su número de WhatsApp (una
+instancia de Evolution), su inbox en Chatwoot y su fila en la tabla `clientes`. El flujo de n8n es
+uno solo: identifica a la inmobiliaria por el inbox del mensaje.
+
 ## Qué necesitás
 
 - Una PC o VPS con **Docker** y **8 GB de RAM**. Todo el stack, propio y sin compartir nada con
   otros proyectos, usa unos 2,5 GB (ver tabla abajo).
-- Un número de WhatsApp para conectar con Evolution.
+- Un número de WhatsApp por inmobiliaria.
 - Una **API key de OpenRouter**.
 - Opcional: un dominio en Cloudflare para entrar desde el celular con `chat.tudominio.com`.
 
@@ -31,9 +35,7 @@ primera vez se frena para pedirte lo único manual:
 2. En Chatwoot, en *tu perfil → Access Token*, copiá el token en `.env` como `CHATWOOT_API_TOKEN`.
 3. Pegá tu API key de OpenRouter en `.env` como `OPENROUTER_API_KEY`.
 
-Volvé a correr `npm run instalar` y **escaneá el QR** que aparece en la terminal desde el WhatsApp
-de la inmobiliaria: *Dispositivos vinculados → Vincular un dispositivo*. Si el QR vence, corré
-`npm run instalar` otra vez. También aparece en Chatwoot, en la conversación con "EvolutionAPI".
+Volvé a correr `npm run instalar` y seguí con el paso 2 para dar de alta la primera inmobiliaria.
 
 Qué hace, en orden:
 
@@ -42,11 +44,9 @@ Qué hace, en orden:
 | `.env` | si no existe, lo crea desde `.env.example` con los 6 secretos generados al azar |
 | Stack | `docker compose up -d --wait`: espera a que todo esté sano |
 | Base de Chatwoot | la prepara el servicio `chatwoot-init` (`db:chatwoot_prepare`, idempotente) |
-| Base `inmo` | aplica `data/schema.sql` |
+| Base `inmo` | aplica `data/schema.sql` y las migraciones de `data/migraciones/` |
 | Webhook | crea por API el webhook `message_created` de Chatwoot → `http://n8n:5678/webhook/wa-recepcionista` |
-| WhatsApp | crea la instancia de Evolution con la integración de Chatwoot, que crea el inbox |
 | n8n | importa las credenciales (Postgres, Redis, OpenRouter, Chatwoot) y el flujo por CLI, lo publica y reinicia n8n |
-| QR | lo muestra si el número todavía no está conectado |
 
 Cada vez que corre, `instalar` pisa el flujo de n8n con el del repo. Los cambios se hacen en
 `workflows/recepcionista-inmobiliaria.json`.
@@ -59,11 +59,13 @@ Cada vez que corre, `instalar` pisa el flujo de n8n con el del repo. Los cambios
 | Postgres | `127.0.0.1:5433` | bases `n8n`, `inmo`, `chatwoot` y `evolution` |
 | Redis | solo red interna | base 0 Chatwoot, 1 flujo de n8n, 6 Evolution |
 
-Los puertos solo se publican en `127.0.0.1`. Desde afuera se entra con el túnel (paso 4).
+Los puertos solo se publican en `127.0.0.1`. Desde afuera se entra con el túnel (paso 5).
 Entre ellos los servicios se hablan por la red interna de Docker: `http://chatwoot-web:3000`,
 `http://n8n:5678` y `http://evolution:8080`. Por eso Chatwoot corre con
 `SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true`: desde la versión 4 bloquea los webhooks a IPs
-privadas, y esta variable de su `.env.example` oficial lo habilita.
+privadas, y esta variable de su `.env.example` oficial lo habilita. El flujo lee la URL de
+Chatwoot de la variable `CHATWOOT_URL` del contenedor de n8n (`$env.CHATWOOT_URL`). Para eso n8n
+corre con `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, porque desde la 2.0 viene bloqueado.
 
 Para ver el flujo en n8n, entrá a http://localhost:5678 y creá tu usuario. Es opcional: el flujo
 funciona sin eso.
@@ -89,22 +91,59 @@ Con conversaciones reales Chatwoot crece; calculá unos 2,5–3 GB en total. En 
 sobra lugar. En Windows o Mac, Docker Desktop corre en una máquina virtual que por defecto usa la
 mitad de la RAM (4 GB), y alcanza. Las imágenes ocupan unos 8 GB de disco.
 
-## 2. Cargar el catálogo
+## 2. Dar de alta una inmobiliaria
+
+```bash
+npm run nuevo-cliente -- "Inmobiliaria del Lago" --asesor "+54 9 294 400-0000" --prompt-archivo lago.txt
+```
+
+1. Crea la instancia de WhatsApp en Evolution, que a su vez crea el inbox en Chatwoot.
+2. Da de alta al cliente en la tabla `clientes`.
+3. Muestra el **QR**: escanealo desde el WhatsApp de la inmobiliaria, en *Dispositivos vinculados →
+   Vincular un dispositivo*.
+
+Si el QR vence, corré el mismo comando otra vez. Si el cliente ya existe, solo actualiza los datos
+que pases. El QR también aparece en Chatwoot, en la conversación con "EvolutionAPI" de ese inbox.
+
+| Opción | Columna | Para qué |
+|---|---|---|
+| `"Nombre"` | `nombre` | cómo se presenta el bot. Del nombre sale también la instancia (`inmobiliaria-del-lago`) |
+| `--umbral 400000` | `umbral_usd` | presupuesto desde el que deriva a un asesor (por defecto 400.000) |
+| `--asesor "+54 9 …"` | `telefono_asesor` | el bot puede pasarlo cuando deriva. El verificador lo deja pasar porque es un dato provisto |
+| `--prompt "…"` o `--prompt-archivo x.txt` | `prompt_extra` | tono, horarios, zonas y datos de la inmobiliaria; se suma al system prompt |
+
+Un ejemplo de `prompt_extra`:
+
+```
+Inmobiliaria del Lago, Bariloche. Tratá de vos y con calidez. Atención: lunes a viernes de 9 a 18
+y sábados de 10 a 13. Trabajamos Centro, Melipal y Km 8. Oficina en Mitre 100.
+```
+
+Para operar el resto:
+
+```bash
+npm run clientes                       # estado de todas: inbox, propiedades, leads y WhatsApp
+npm run clientes -- --desactivar 3     # el bot deja de atender ese inbox (--activar 3 lo vuelve a prender)
+```
+
+Si un mensaje llega de un inbox sin cliente activo, el flujo lo ignora.
+
+## 3. Cargar el catálogo
 
 Pedile a la inmobiliaria una planilla con las columnas de `data/plantilla-propiedades.csv`,
 exportala como CSV y corré:
 
 ```bash
-DATABASE_URL=postgres://postgres:TU_POSTGRES_PASSWORD@127.0.0.1:5433/inmo npm run importar -- propiedades.csv --desactivar-faltantes
+npm run importar -- propiedades.csv --cliente 3 --desactivar-faltantes
 ```
 
+- Usa la base del stack con los datos de `.env`. Para otra base, definí `DATABASE_URL`.
 - Si una fila tiene errores, el script no escribe nada y te dice qué corregir.
 - Para actualizar precios o dar de baja propiedades vendidas, se vuelve a correr con la planilla nueva.
-- `--desactivar-faltantes` saca del catálogo lo que ya no está en la planilla.
-- Para una demo, cargá `data/seed_propiedades.sql`:
-  `docker compose exec -T postgres psql -U postgres -d inmo < data/seed_propiedades.sql`.
+- `--desactivar-faltantes` saca del catálogo de **ese cliente** lo que ya no está en la planilla.
+- Los códigos son únicos dentro de cada inmobiliaria: dos clientes pueden tener un `ABC-001` cada uno.
 
-## 3. Probarlo
+## 4. Probarlo
 
 Desde otro celular, escribí *"Hola, busco depto en venta en el Centro hasta 200 mil dólares"*.
 A los ~7 segundos responde con propiedades de la base.
@@ -113,10 +152,10 @@ Si no responde, revisá en este orden:
 
 1. `docker compose ps`: todos los servicios tienen que figurar `healthy`.
 2. *Executions* en n8n: si no hay ejecución, revisá el webhook. `docker compose logs chatwoot-sidekiq | grep -i webhook` muestra si Chatwoot lo pudo mandar.
-3. Si la ejecución terminó en *Fin (ignorado)*, el inbox del mensaje no es el de la instalación.
+3. Si la ejecución terminó en *Fin (inbox sin cliente activo)*, revisá `npm run clientes`: el inbox tiene que tener un cliente activo.
 4. Si falla en un nodo de Chatwoot, revisá `CHATWOOT_API_TOKEN` y corré `npm run instalar` de nuevo.
 
-## 4. Entrar desde el celular (túnel de Cloudflare)
+## 5. Entrar desde el celular (túnel de Cloudflare)
 
 La app de Chatwoot necesita una URL pública. Hay dos formas:
 
@@ -160,3 +199,16 @@ El flujo trae `nvidia/nemotron-3-super-120b-a12b:free`, que alcanza para una dem
 cliente que paga usá un modelo pago barato con tool-calling, porque los gratuitos tienen límites
 diarios y se caen en horas pico. Se cambia en el nodo **OpenRouter Model**. El verificador
 anti-alucinación funciona igual con cualquier modelo.
+
+## Actualizar desde una instalación de un solo cliente
+
+La migración `data/migraciones/001_clientes.sql` corre sola con `npm run instalar` y no borra nada.
+Si la base ya tenía propiedades o leads, quedan en el cliente 1 ("Cliente inicial", sin inbox).
+Para que vuelva a atender, vinculalo a su inbox:
+
+```sql
+UPDATE clientes SET nombre = 'Nombre real', inbox_id = 7 WHERE id = 1;
+```
+
+Para eso: `docker compose exec postgres psql -U postgres -d inmo`.
+

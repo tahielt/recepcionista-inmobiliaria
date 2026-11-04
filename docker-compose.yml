@@ -79,6 +79,9 @@ services:
       N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 0.0.0.0
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
+      # El flujo lee la URL de Chatwoot de acá ($env.CHATWOOT_URL); n8n 2.x bloquea $env por defecto.
+      CHATWOOT_URL: http://chatwoot-web:3000
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       GENERIC_TIMEZONE: ${TZ:-America/Argentina/Buenos_Aires}
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
     volumes:
