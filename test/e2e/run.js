@@ -40,7 +40,7 @@ async function prepararBase() {
   await db.query(readFileSync('data/schema.sql', 'utf8'));
   for (const f of readdirSync('data/migraciones').sort()) await db.query(readFileSync(`data/migraciones/${f}`, 'utf8'));
   await db.query(`INSERT INTO clientes (id, nombre, inbox_id, umbral_usd, prompt_extra, activo) VALUES
-      (1, 'Inmobiliaria Demo', 3, 400000, 'Inmobiliaria de Bariloche.', true),
+      (1, 'Inmobiliaria Demo', 3, 400000, 'Inmobiliaria de Bariloche.', true), -- horas_reactivacion: 12 (por defecto)
       (2, 'Inmobiliaria Sur', 4, 150000, 'HORARIO-SUR: lunes a viernes de 9 a 18.', true),
       (3, 'Inmobiliaria Inactiva', 5, 400000, '', false)
     ON CONFLICT (id) DO UPDATE SET nombre = EXCLUDED.nombre, inbox_id = EXCLUDED.inbox_id, umbral_usd = EXCLUDED.umbral_usd,
@@ -99,13 +99,15 @@ let conv = 0, mid = 0;
 const base = Date.now() % 1e7;
 const contacto = () => { const c = ++conv + base; return { conv: c, tel: `+549294${String(c).padStart(7, '0')}` }; };
 const ASESOR = { id: 7, name: 'Asesora Demo', type: 'user' };
-// Payload real de Chatwoot: un mensaje del cliente, una nota privada del asesor o un eco del propio bot.
+const BOT = { id: 1, name: 'Recepcionista IA', type: 'agent_bot' }; // el flujo escribe con un Agent Bot de Chatwoot
+// Payload real de Chatwoot (sender.type verificado contra Chatwoot 4.19):
+// cliente → incoming · nota/asesor → outgoing de un user, privado o público · eco/eco-nota → outgoing del agent_bot.
 function payload(c, texto, tipo = 'cliente') {
   const cliente = { id: c.conv, name: 'Cliente Demo', phone_number: c.tel, type: 'contact' };
   return {
     event: 'message_created', id: 9000000 + ++mid, content: texto, created_at: new Date().toISOString(),
     message_type: tipo === 'cliente' ? 'incoming' : 'outgoing', private: tipo === 'nota' || tipo === 'eco-nota',
-    content_type: 'text', attachments: [], sender: tipo === 'cliente' ? cliente : ASESOR,
+    content_type: 'text', attachments: [], sender: tipo === 'cliente' ? cliente : tipo.startsWith('eco') ? BOT : ASESOR,
     account: { id: 1, name: 'Cuenta' }, inbox: { id: c.inbox ?? 3, name: 'WhatsApp' },
     conversation: { id: c.conv, inbox_id: c.inbox ?? 3, status: 'open', meta: { sender: cliente }, contact_inbox: { source_id: c.tel.slice(1) } },
   };
@@ -159,12 +161,33 @@ const ESCENARIOS = [
       ['muestra la propiedad', /LCB-009/.test(c.texto), c.texto],
       ['deriva a un asesor', c.eventos.some((e) => e.tipo === 'derivacion'), JSON.stringify(c.eventos)],
     ] },
-  { nombre: 'Eco: ignora los mensajes y notas que salen de Chatwoot', c: contacto(),
-    pasos: [[0, 'Te escribe la asesora ECO1', 'eco'], [0, '🤖 IA pausada ECO2', 'eco-nota']],
+  { nombre: 'Eco: ignora los mensajes y notas del propio bot (Agent Bot)', c: contacto(),
+    pasos: [[0, 'Tengo estas opciones ECO1', 'eco'], [0, '🤖 IA pausada ECO2', 'eco-nota']],
     chequear: (c) => [
       ['no llama al modelo', c.llm.length === 0, c.llm.map((p) => p.user).join(' | ')],
       ['no responde ni escribe', c.enviados.length === 0, JSON.stringify(c.enviados)],
+      ['su propio mensaje no pausa la IA', c.lead?.ia_activa !== false, JSON.stringify(c.lead)],
     ] },
+  { nombre: 'Pausa automática: escribe un asesor → la IA se calla; /ia on → vuelve', c: contacto(),
+    pasos: [[0, 'Hola, soy Laura de la inmobiliaria, te ayudo yo', 'asesor'], [1500, 'dale, gracias Laura AUTO1'],
+      [12000, '/ia on', 'nota'], [1500, 'me interesa, busco algo en venta en Ñireco AUTO2']],
+    chequear: (c) => [
+      ['con el asesor escribiendo no llama al modelo', !c.llm.some((p) => /AUTO1/.test(p.user)), c.llm.map((p) => p.user).join(' | ')],
+      ['con /ia on vuelve a responder', /LCB-004/.test(c.texto), c.texto],
+      ['no le contestó al asesor ni al cliente mientras estaba en pausa', !/Contame qué buscás/.test(c.texto), c.texto],
+    ] },
+  (() => {
+    const c = contacto();
+    const atrasar = (horas) => () => db.query(`UPDATE leads SET actividad_asesor_at = now() - make_interval(hours => $2) WHERE cliente_id = 1 AND session_id = $1`, [sid(c), horas]);
+    return { nombre: 'Reactivación automática: vuelve sola tras las horas del cliente (12) sin actividad del asesor', c,
+      pasos: [[0, 'Buen día, lo veo yo', 'asesor'], [1500, atrasar(11)], [500, 'busco algo en venta en Ñireco REACT11'],
+        [12000, atrasar(13)], [500, 'busco algo en venta en Ñireco REACT13']],
+      chequear: (c) => [
+        ['a las 11 h sigue en pausa', !c.llm.some((p) => /REACT11/.test(p.user)), c.llm.map((p) => p.user).join(' | ')],
+        ['a las 13 h responde de nuevo', c.llm.some((p) => /REACT13/.test(p.user)) && /LCB-004/.test(c.texto), c.texto],
+        ['queda activa otra vez', c.lead?.ia_activa === true && c.lead?.actividad_asesor_at === null, JSON.stringify(c.lead)],
+      ] };
+  })(),
   { nombre: 'Multi-cliente: cada inmobiliaria muestra su catálogo, con su umbral y su prompt', c: { ...contacto(), inbox: 4, cliente: 2 },
     pasos: [[0, 'Buenas, busco depto en venta en el Centro hasta 200 mil dólares']],
     chequear: (c) => [
@@ -203,6 +226,7 @@ const ESCENARIOS = [
 async function correrEscenario(e) {
   for (const [espera, texto, tipo, c = e.c] of e.pasos) {
     await dormir(espera);
+    if (typeof texto === 'function') { await texto(); continue; } // paso que toca la base (p. ej. simular horas)
     const r = await fetch(`http://127.0.0.1:${PUERTOS.n8n}/webhook/wa-recepcionista`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(c, texto, tipo)),
     });
@@ -251,7 +275,7 @@ try {
   for (const e of ESCENARIOS) {
     const propios = enviados.filter((x) => x.conv === e.c.conv);
     const mensajes = propios.filter((x) => x.accion === 'messages');
-    const usados = new Set(e.pasos.filter((p) => !/^\/ia/.test(p[1])).map((p) => p[1]));
+    const usados = new Set(e.pasos.filter((p) => typeof p[1] === 'string' && !/^\/ia/.test(p[1])).map((p) => p[1]));
     const c = {
       enviados: propios,
       texto: mensajes.filter((x) => !x.private).map((x) => x.content).join('\n'),

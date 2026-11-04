@@ -12,7 +12,7 @@ if (accion === '--activar' || accion === '--desactivar') {
   console.log(rowCount ? `✓ Cliente ${id} ${accion === '--activar' ? 'activado' : 'desactivado'}` : `✗ No existe el cliente ${id}`);
 }
 const { rows } = await db.query(`
-  SELECT c.id, c.nombre, c.inbox_id, c.umbral_usd, c.activo,
+  SELECT c.id, c.nombre, c.inbox_id, c.umbral_usd, c.horas_reactivacion AS horas, c.activo,
     (SELECT count(*) FROM propiedades p WHERE p.cliente_id = c.id AND p.activa)::int AS propiedades,
     (SELECT count(*) FROM leads l WHERE l.cliente_id = c.id)::int AS leads
   FROM clientes c ORDER BY c.id`);

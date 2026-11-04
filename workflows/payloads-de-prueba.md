@@ -37,6 +37,9 @@ El bot responde, se pausa y deja una nota privada en la conversación.
 ```
 Para reactivarlo, mandá lo mismo con `"content": "/ia on"`.
 
+Un mensaje **público** de un asesor (`"private": false`, `sender.type: "user"`) también pausa la IA,
+sin `/ia off`. Los del bot llegan con `sender.type: "agent_bot"` y se ignoran.
+
 ### 4. Caso del VIDEO: intento de precio inventado
 Pedí "un precio aproximado" de una zona sin stock. El **verificador anti-alucinación** bloquea la
 respuesta, le contesta al cliente que lo confirma un asesor y deja una nota privada con el motivo.

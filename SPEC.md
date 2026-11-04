@@ -10,7 +10,8 @@ bloquea cualquier precio o link que no haya salido de una herramienta en ese tur
 
 ## Alcance funcional
 1. **Entrada WhatsApp** vía webhook de Chatwoot (`message_created`; WhatsApp conectado con Evolution API).
-   Solo procesa mensajes `incoming` del cliente y notas privadas `/ia on|off`; ignora el eco del propio
+   Solo procesa mensajes `incoming` del cliente, notas privadas `/ia on|off` y mensajes públicos de un
+   asesor (`sender.type = user`, que pausan la IA); ignora el eco del propio
    bot, el contacto bot de Evolution y actividades. `session_id = wa:<teléfono del contacto>`.
    **Multi-cliente:** la inmobiliaria se resuelve por `inbox_id` en la tabla `clientes`; si el inbox no
    tiene un cliente activo, el mensaje se ignora. Leads, catálogo, eventos, buffer y memoria van por cliente.
@@ -25,7 +26,10 @@ bloquea cualquier precio o link que no haya salido de una herramienta en ese tur
 ## Patrones reusados (de PATRONES.md)
 - **Patrón 1 — Buffer de mensajes:** Redis push a `buf:<session>` → Wait 7 s → compara último
   `message_id`; si llegó otro, esta ejecución descarta.
-- **Patrón 2 — Pausa humana:** flag `leads.ia_activa`. Comando por nota privada `/ia on` · `/ia off`.
+- **Patrón 2 — Pausa humana:** flag `leads.ia_activa`. El bot escribe con un Agent Bot de Chatwoot
+  (`sender.type = agent_bot`); si un asesor (`user`) escribe en público, la IA se pausa sola.
+  Vuelve con la nota privada `/ia on` o sola a las `clientes.horas_reactivacion` h (def. 12; 0 = nunca)
+  del último mensaje del asesor (`leads.actividad_asesor_at`). `/ia off` pausa sin escribirle al cliente.
   Si `ia_activa=false`, el agente no responde.
 - **Patrón 3 — Salida humanizada:** respuesta partida en mensajes ≤250 caracteres, enviados de a
   uno con "escribiendo…" y ~3 s de pausa.

@@ -29,7 +29,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// ── Webhook de Chatwoot (evento message_created) ─────────────────────────────\n// Entra: mensajes del cliente (incoming) y notas privadas /ia on|off de un asesor.\n// Se ignora todo lo demás, incluidos los mensajes y notas que manda este mismo flujo (eco).\n// La inmobiliaria se resuelve en el nodo siguiente por inbox_id (tabla clientes).\nconst b = $json.body ?? {};\nconst conv = b.conversation ?? {};\nconst contenido = String(b.content ?? '').trim();\nconst entrante = (b.message_type === 'incoming' || b.message_type === 0) && !b.private;\nconst esComando = b.private === true && /^\\/ia\\b/i.test(contenido);\nconst adjuntos = (b.attachments ?? []).length > 0;\nconst texto = contenido || (entrante && adjuntos ? '[El cliente mandó un audio, foto o archivo. Pedile que te lo escriba.]' : '');\nconst inbox_id = Number(b.inbox?.id ?? conv.inbox_id) || 0;\nconst contacto = conv.meta?.sender ?? (entrante ? b.sender : null) ?? {};\nconst tel = String(contacto.phone_number ?? conv.contact_inbox?.source_id ?? '').replace(/\\D/g, '');\nconst ignorar = b.event !== 'message_created'\n  || tel === '123456' // contacto bot de Evolution: ahí manda el QR y el estado de la conexión\n  || !(esComando || (entrante && texto));\nconst session_id = tel ? 'wa:' + tel : 'cw:' + conv.id;\n\nreturn {\n  ignorar,\n  inbox_id,\n  session_id,\n  clave: `${inbox_id}:${session_id}`, // buffer y memoria en Redis, separados por inmobiliaria\n  texto,\n  message_id: String(b.id ?? ''),\n  nota_privada: esComando ? contenido : '',\n  conversation_id: conv.id,\n  account_id: b.account?.id,\n};"
+        "jsCode": "// ── Webhook de Chatwoot (evento message_created) ─────────────────────────────\n// Entra: mensajes del cliente (incoming), notas privadas /ia on|off y mensajes públicos de un asesor.\n// Un asesor (sender.type = user) que escribe en público pausa la IA, como un /ia off implícito.\n// El bot escribe con su Agent Bot (sender.type = agent_bot): sus mensajes y notas se ignoran (eco).\n// La inmobiliaria se resuelve en el nodo siguiente por inbox_id (tabla clientes).\nconst b = $json.body ?? {};\nconst conv = b.conversation ?? {};\nconst contenido = String(b.content ?? '').trim();\nconst entrante = (b.message_type === 'incoming' || b.message_type === 0) && !b.private;\nconst esComando = b.private === true && /^\\/ia\\b/i.test(contenido);\nconst adjuntos = (b.attachments ?? []).length > 0;\nconst asesor = (b.message_type === 'outgoing' || b.message_type === 1) && !b.private && b.sender?.type === 'user' && Boolean(contenido || adjuntos);\nconst texto = contenido || (entrante && adjuntos ? '[El cliente mandó un audio, foto o archivo. Pedile que te lo escriba.]' : '');\nconst inbox_id = Number(b.inbox?.id ?? conv.inbox_id) || 0;\nconst contacto = conv.meta?.sender ?? (entrante ? b.sender : null) ?? {};\nconst tel = String(contacto.phone_number ?? conv.contact_inbox?.source_id ?? '').replace(/\\D/g, '');\nconst ignorar = b.event !== 'message_created'\n  || tel === '123456' // contacto bot de Evolution: ahí manda el QR y el estado de la conexión\n  || !(esComando || asesor || (entrante && texto));\nconst session_id = tel ? 'wa:' + tel : 'cw:' + conv.id;\n\nreturn {\n  ignorar,\n  inbox_id,\n  session_id,\n  clave: `${inbox_id}:${session_id}`, // buffer y memoria en Redis, separados por inmobiliaria\n  texto,\n  message_id: String(b.id ?? ''),\n  comando: esComando ? contenido : asesor ? '/ia off' : '',\n  por_asesor: asesor,\n  conversation_id: conv.id,\n  account_id: b.account?.id,\n};"
       }
     },
     {
@@ -52,7 +52,7 @@
           "conditions": [
             {
               "id": "cc1",
-              "leftValue": "={{ $('Normalizar entrada').item.json.nota_privada }}",
+              "leftValue": "={{ $('Normalizar entrada').item.json.comando }}",
               "rightValue": "/ia",
               "operator": {
                 "type": "string",
@@ -75,9 +75,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO leads (cliente_id, session_id, ia_activa, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (cliente_id, session_id) DO UPDATE SET ia_activa = EXCLUDED.ia_activa, updated_at = now();",
+        "query": "INSERT INTO leads (cliente_id, session_id, ia_activa, actividad_asesor_at, updated_at) VALUES ($1, $2, $3::boolean, CASE WHEN $3::boolean THEN NULL ELSE now() END, now()) ON CONFLICT (cliente_id, session_id) DO UPDATE SET ia_activa = EXCLUDED.ia_activa, actividad_asesor_at = EXCLUDED.actividad_asesor_at, updated_at = now();",
         "options": {
-          "queryReplacement": "={{ [$('Resolver cliente').item.json.cliente.id, $('Normalizar entrada').item.json.session_id, /\\/ia\\s*on/i.test($('Normalizar entrada').item.json.nota_privada)] }}"
+          "queryReplacement": "={{ [$('Resolver cliente').item.json.cliente.id, $('Normalizar entrada').item.json.session_id, /\\/ia\\s*on/i.test($('Normalizar entrada').item.json.comando)] }}"
         }
       }
     },
@@ -103,9 +103,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT COALESCE((SELECT ia_activa FROM leads WHERE cliente_id = $1 AND session_id = $2), true) AS ia_activa;",
+        "query": "WITH reactivada AS (UPDATE leads SET ia_activa = true, actividad_asesor_at = NULL, updated_at = now() WHERE cliente_id = $1 AND session_id = $2 AND NOT ia_activa AND $3::int > 0 AND actividad_asesor_at < now() - make_interval(hours => $3::int) RETURNING 1) SELECT EXISTS (SELECT 1 FROM reactivada) OR COALESCE((SELECT ia_activa FROM leads WHERE cliente_id = $1 AND session_id = $2), true) AS ia_activa;",
         "options": {
-          "queryReplacement": "={{ [$('Resolver cliente').item.json.cliente.id, $('Normalizar entrada').item.json.session_id] }}"
+          "queryReplacement": "={{ [$('Resolver cliente').item.json.cliente.id, $('Normalizar entrada').item.json.session_id, $('Resolver cliente').item.json.cliente.horas_reactivacion ?? 0] }}"
         }
       }
     },
@@ -389,7 +389,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO eventos_equipo (cliente_id, session_id, tipo, detalle) VALUES ($1, $2, $3, $4); INSERT INTO leads (cliente_id, session_id, ia_activa, derivado, updated_at) VALUES ($1, $2, false, true, now()) ON CONFLICT (cliente_id, session_id) DO UPDATE SET ia_activa = false, derivado = true, updated_at = now();",
+        "query": "INSERT INTO eventos_equipo (cliente_id, session_id, tipo, detalle) VALUES ($1, $2, $3, $4); INSERT INTO leads (cliente_id, session_id, ia_activa, derivado, actividad_asesor_at, updated_at) VALUES ($1, $2, false, true, now(), now()) ON CONFLICT (cliente_id, session_id) DO UPDATE SET ia_activa = false, derivado = true, actividad_asesor_at = now(), updated_at = now();",
         "options": {
           "queryReplacement": "={{ [$json.cliente_id, $json.session_id, $json.tipo_evento, $json.motivo] }}"
         }
@@ -601,7 +601,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { content: '🤖 IA pausada en esta conversación.\\nMotivo: ' + $('Verificador anti-alucinación').item.json.motivo + '\\n\\nCuando termines, mandá la nota privada \"/ia on\" para que vuelva a atender.', message_type: 'outgoing', private: true } }}",
+        "jsonBody": "={{ { content: '🤖 IA pausada en esta conversación.\\nMotivo: ' + $('Verificador anti-alucinación').item.json.motivo + '\\n\\nCuando termines, mandá la nota privada \"/ia on\" para que vuelva a atender.' + ($('Resolver cliente').item.json.cliente.horas_reactivacion > 0 ? ' Si no, vuelve sola ' + $('Resolver cliente').item.json.cliente.horas_reactivacion + ' h después de tu último mensaje.' : ''), message_type: 'outgoing', private: true } }}",
         "options": {}
       }
     },

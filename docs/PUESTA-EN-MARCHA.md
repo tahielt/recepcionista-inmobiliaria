@@ -46,7 +46,8 @@ Qué hace, en orden:
 | Base de Chatwoot | la prepara el servicio `chatwoot-init` (`db:chatwoot_prepare`, idempotente) |
 | Base `inmo` | aplica `data/schema.sql` y las migraciones de `data/migraciones/` |
 | Webhook | crea por API el webhook `message_created` de Chatwoot → `http://n8n:5678/webhook/wa-recepcionista` |
-| n8n | importa las credenciales (Postgres, Redis, OpenRouter, Chatwoot) y el flujo por CLI, lo publica y reinicia n8n |
+| Agent Bot | crea el bot "Recepcionista IA" en Chatwoot; n8n escribe con su token (no hace falta pegarlo) |
+| n8n | importa las credenciales (Postgres, Redis, OpenRouter, Chatwoot con el token del Agent Bot) y el flujo por CLI, lo publica y reinicia n8n |
 
 Cada vez que corre, `instalar` pisa el flujo de n8n con el del repo. Los cambios se hacen en
 `workflows/recepcionista-inmobiliaria.json`.
@@ -110,6 +111,7 @@ que pases. El QR también aparece en Chatwoot, en la conversación con "Evolutio
 | `"Nombre"` | `nombre` | cómo se presenta el bot. Del nombre sale también la instancia (`inmobiliaria-del-lago`) |
 | `--umbral 400000` | `umbral_usd` | presupuesto desde el que deriva a un asesor (por defecto 400.000) |
 | `--asesor "+54 9 …"` | `telefono_asesor` | el bot puede pasarlo cuando deriva. El verificador lo deja pasar porque es un dato provisto |
+| `--horas 12` | `horas_reactivacion` | horas sin actividad del asesor tras las que la IA vuelve sola (0 = solo con `/ia on`) |
 | `--prompt "…"` o `--prompt-archivo x.txt` | `prompt_extra` | tono, horarios, zonas y datos de la inmobiliaria; se suma al system prompt |
 
 Un ejemplo de `prompt_extra`:
@@ -187,11 +189,19 @@ Con la app de Chatwoot (Android/iOS) el asesor maneja todo:
 
 | Acción | Cómo |
 |---|---|
-| Tomar una conversación | nota privada `/ia off` y responder normalmente |
+| Tomar una conversación | **escribile al cliente y listo**: la IA se pausa sola en esa conversación |
 | Devolvérsela al bot | nota privada `/ia on` |
-| Derivaciones | el bot se pausa solo y deja una nota privada con el motivo: visita, oferta, presupuesto alto o un dato que no pudo confirmar |
+| Que vuelva sola | si el asesor no escribe más, la IA vuelve a atender a las `horas_reactivacion` h (12 por defecto) de su último mensaje |
+| Pausar sin escribirle al cliente | nota privada `/ia off` |
+| Derivaciones | el bot se pausa solo y deja una nota privada con el motivo: visita, oferta, presupuesto alto o un dato que no pudo confirmar. Las horas corren desde la derivación |
 
-El bot no se pausa solo cuando un asesor escribe sin la nota `/ia off`. Hay que mandarla.
+Cómo distingue al bot del asesor: el bot escribe con su propio **Agent Bot** de Chatwoot
+("Recepcionista IA", lo crea `npm run instalar`), así sus mensajes llegan con
+`sender.type = agent_bot`. Cualquier mensaje público con `sender.type = user` es de una persona y
+pausa la IA. Las notas privadas no la pausan, salvo `/ia off`. También la pausa un mensaje que el
+asesor manda desde el WhatsApp del celular de la inmobiliaria: Evolution lo pasa a Chatwoot como
+mensaje de un usuario. El Agent Bot no se conecta a los inboxes, así las conversaciones no
+quedan en "pendiente" y los asesores las ven como siempre.
 
 ## Modelo
 

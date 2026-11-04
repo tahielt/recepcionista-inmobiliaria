@@ -52,13 +52,25 @@ else {
   console.log(`  creado: ${WEBHOOK_N8N}`);
 }
 
+// 5b. Agent Bot: el bot escribe con su propio token, así sus mensajes se distinguen de los de un
+// asesor (sender.type agent_bot vs user). Es de la cuenta y no se conecta a los inboxes, así las
+// conversaciones no quedan en "pendiente".
+paso('Chatwoot: Agent Bot del recepcionista');
+const NOMBRE_BOT = 'Recepcionista IA';
+let bot = (await chatwoot(`/api/v1/accounts/${cuenta}/agent_bots`)).find((b) => b.name === NOMBRE_BOT);
+if (bot) console.log(`  ya existe (id ${bot.id})`);
+else {
+  bot = await chatwoot(`/api/v1/accounts/${cuenta}/agent_bots`, { metodo: 'POST', cuerpo: { name: NOMBRE_BOT, description: 'Atiende WhatsApp con el catálogo de cada inmobiliaria' } });
+  console.log(`  creado (id ${bot.id})`);
+}
+
 // 6. n8n: credenciales y flujo por CLI (como test/e2e/run.js), publicado.
 paso('n8n: credenciales y flujo');
 const CREDS = {
   postgres: { id: 'inmoPostgres', name: 'Postgres inmo', data: { host: 'postgres', port: 5432, database: 'inmo', user: env.POSTGRES_USER || 'postgres', password: env.POSTGRES_PASSWORD, ssl: 'disable' } },
   redis: { id: 'inmoRedis', name: 'Redis', data: { host: 'redis', port: 6379, password: env.REDIS_PASSWORD, database: 1 } },
   openRouterApi: { id: 'inmoOpenRouter', name: 'OpenRouter', data: { apiKey: env.OPENROUTER_API_KEY, url: 'https://openrouter.ai/api/v1' } },
-  httpHeaderAuth: { id: 'inmoChatwoot', name: 'Chatwoot API', data: { name: 'api_access_token', value: env.CHATWOOT_API_TOKEN } },
+  httpHeaderAuth: { id: 'inmoChatwoot', name: 'Chatwoot (Agent Bot)', data: { name: 'api_access_token', value: bot.access_token } },
 };
 const wf = JSON.parse(readFileSync('workflows/recepcionista-inmobiliaria.json', 'utf8'));
 const n8nImportar = (tipo, datos) => compose(

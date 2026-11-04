@@ -24,8 +24,8 @@ flowchart TD
     IG -- "sí" --> CL{¿inbox de un<br/>cliente activo?}
     CL -- "no" --> END4([ignorar])
     CL -- "sí: nombre, umbral,<br/>asesor, prompt_extra" --> NP{¿Nota privada<br/>/ia on|off?}
-    NP -- "comando" --> SET[Set ia_activa en leads] --> END1([fin])
-    NP -- "mensaje" --> PH{ia_activa?}
+    NP -- "comando, o un asesor<br/>escribió (sender user)" --> SET[Set ia_activa en leads] --> END1([fin])
+    NP -- "mensaje" --> PH{ia_activa? o pasaron<br/>las horas sin asesor}
     PH -- "false (humano activo)" --> END2([fin: IA en pausa])
     PH -- "true" --> BUF[Patrón 1<br/>Buffer Redis + Wait 7s]
     BUF --> LAST{¿es el último<br/>mensaje?}
@@ -47,7 +47,7 @@ flowchart TD
 | # | Patrón | Rol en este flujo |
 |---|--------|-------------------|
 | 1 | Buffer de mensajes | Agrupa ráfagas antes de responder |
-| 2 | Pausa humana | nota privada `/ia on\|off` en Chatwoot; respeta cuando un asesor toma el chat |
+| 2 | Pausa humana | si un asesor escribe, la IA se pausa sola; vuelve con `/ia on` o a las X horas sin actividad del asesor |
 | 3 | Salida humanizada | Mensajes ≤250 c, de a uno, con "escribiendo…" |
 | 4 | **Verificador anti-alucinación** | Bloquea precios/links no respaldados por el catálogo |
 
@@ -85,9 +85,11 @@ cliente activo se ignora.
 | Precio inventado | el verificador bloquea "USD 150.000" sin respaldo, avisa al equipo y pausa la IA |
 | Precio alterado | bloquea "USD 25.000" cuando el catálogo dice 125.000 |
 | Pausa humana | `/ia off` silencia (ni llama al modelo), `/ia on` reactiva |
+| Pausa automática | un mensaje público de un asesor (`sender.type = user`) pausa la IA; `/ia on` la vuelve a prender |
+| Reactivación automática | a las 11 h sigue en pausa; a las 13 h (umbral de 12 h del cliente) responde de nuevo |
 | Visita | responde, deriva, pausa y deja nota privada con el motivo |
 | Presupuesto alto | más de USD 400.000 → deriva a un asesor |
-| Eco | ignora los mensajes y notas que salen de Chatwoot (incluidos los del propio bot) |
+| Eco | ignora los mensajes y notas del propio bot (Agent Bot, `sender.type = agent_bot`) y no se pausa con ellos |
 | Bot de Evolution | ignora la conversación con "EvolutionAPI", donde Evolution manda el QR y el estado de la conexión |
 | Multi-cliente | cada inmobiliaria ve solo su catálogo y usa su umbral y su `prompt_extra` |
 | Mismo WhatsApp, dos inmobiliarias | dos leads separados, y la memoria de la conversación no pasa de una a otra |
