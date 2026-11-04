@@ -4,8 +4,11 @@ Agente de WhatsApp para una inmobiliaria **ficticia** de Bariloche ("Inmobiliari
 atiende, **precalifica leads** y **muestra propiedades de un catálogo real** — con traspaso a
 humano y un **verificador anti-alucinación** que impide inventar precios o links.
 
-> ⚠️ Proyecto de portfolio. Datos 100% sintéticos (propiedades, precios, teléfonos y chats
-> inventados). No es un sistema de producción ni usa datos de clientes reales.
+Funciona con WhatsApp real (Evolution API + Chatwoot): el equipo lo maneja desde la app de
+Chatwoot en el celular. Para instalarlo en una inmobiliaria → **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+
+> Los datos del repo son sintéticos (propiedades, precios y teléfonos inventados). El catálogo
+> real de cada inmobiliaria se carga desde una planilla con `npm run importar`.
 
 ## Demo en 10 segundos
 El bot recomienda solo propiedades que existen en la base. Si el modelo intenta decir un precio
@@ -16,7 +19,9 @@ un asesor" + avisa al equipo. Eso es lo que se ve en el video.
 
 ```mermaid
 flowchart TD
-    WA[Webhook WhatsApp<br/>simula Chatwoot] --> NP{¿Nota privada<br/>/ia on|off?}
+    WA[WhatsApp → Evolution → Chatwoot<br/>webhook message_created] --> IG{¿mensaje del cliente<br/>o comando /ia?}
+    IG -- "eco, otro inbox, actividad" --> END0([ignorar])
+    IG -- "sí" --> NP{¿Nota privada<br/>/ia on|off?}
     NP -- "comando" --> SET[Set ia_activa en leads] --> END1([fin])
     NP -- "mensaje" --> PH{ia_activa?}
     PH -- "false (humano activo)" --> END2([fin: IA en pausa])
@@ -28,28 +33,28 @@ flowchart TD
     AG -- tool --> T1[buscar_propiedades<br/>Postgres]
     AG -- tool --> T2[guardar_precalificacion<br/>Postgres]
     AG --> VER[Patrón 4<br/>Verificador anti-alucinación]
-    VER -- "hardFail" --> NOTE[Nota privada equipo<br/>+ pausar IA]
+    VER -- "hardFail" --> NOTE[Pausar IA + nota privada<br/>en Chatwoot con el motivo]
     VER -- "ok" --> DER{¿derivar?<br/>presupuesto>umbral o pide humano}
     DER -- "sí" --> NOTE
     DER -- "no" --> OUT[Patrón 3<br/>Salida humanizada ≤250c]
     NOTE --> OUT
-    OUT --> SEND[HTTP enviar a WhatsApp<br/>simulado]
+    OUT --> SEND[Chatwoot API<br/>escribiendo… + mensaje → WhatsApp]
 ```
 
 ## Patrones reusados
 | # | Patrón | Rol en este flujo |
 |---|--------|-------------------|
 | 1 | Buffer de mensajes | Agrupa ráfagas antes de responder |
-| 2 | Pausa humana | `/ia on\|off`; respeta cuando un asesor toma el chat |
+| 2 | Pausa humana | nota privada `/ia on\|off` en Chatwoot; respeta cuando un asesor toma el chat |
 | 3 | Salida humanizada | Mensajes ≤250 c, de a uno, con "escribiendo…" |
 | 4 | **Verificador anti-alucinación** | Bloquea precios/links no respaldados por el catálogo |
 
 ## Stack
-n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres/Supabase · Redis · WhatsApp (webhook)
+n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres/Supabase · Redis · Evolution API + Chatwoot (WhatsApp)
 
 ## Probado en n8n (end-to-end)
 
-`test/e2e/run.js` importa este flujo en una n8n real (2.35), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **WhatsApp falso** que registra lo que se envía. Así se prueba el flujo, no la suerte del modelo.
+`test/e2e/run.js` importa este flujo en una n8n real (2.35), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **Chatwoot falso** que registra lo que se envía. Los mensajes entran con el formato real del webhook de Chatwoot. Así se prueba el flujo, no la suerte del modelo.
 
 | Escenario | Qué verifica |
 |---|---|
@@ -58,8 +63,10 @@ n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12
 | Precio inventado | el verificador bloquea "USD 150.000" sin respaldo, avisa al equipo y pausa la IA |
 | Precio alterado | bloquea "USD 25.000" cuando el catálogo dice 125.000 |
 | Pausa humana | `/ia off` silencia (ni llama al modelo), `/ia on` reactiva |
-| Visita | responde, deriva y pausa |
+| Visita | responde, deriva, pausa y deja nota privada con el motivo |
 | Presupuesto alto | más de USD 400.000 → deriva a un asesor |
+| Eco | ignora los mensajes y notas que salen de Chatwoot (incluidos los del propio bot) |
+| Autenticación | todas las llamadas a la API de Chatwoot llevan `api_access_token` |
 
 ```bash
 docker compose -f docker-compose.test.yml up -d
@@ -74,15 +81,15 @@ N8N_BIN="npx n8n" npm run test:e2e
 - **La pausa no se aplicaba a leads nuevos:** el `UPDATE` no hacía nada si el lead no existía todavía; ahora es un upsert.
 - **La derivación por presupuesto alto no existía:** el umbral (USD 400.000) está en "Normalizar entrada".
 
-## Cómo probarlo a mano
-1. Correr `data/schema.sql` y `data/seed_propiedades.sql` en la Postgres del stack (o Supabase).
-2. Importar `workflows/recepcionista-inmobiliaria.json` en n8n.
-3. Cargar las credenciales (Postgres/Supabase, Redis, OpenRouter) y seleccionarlas en los nodos.
-4. Disparar el webhook con un mensaje de ejemplo (ver `workflows/` para payloads de prueba).
+## Ponerlo en producción
+Paso a paso (base, Evolution, Chatwoot, credenciales y webhook): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+Para probar el webhook a mano sin WhatsApp: `workflows/payloads-de-prueba.md`.
 
-## Datos sintéticos
-20 propiedades de Bariloche (venta y alquiler, precios en USD creíbles) en
-`data/seed_propiedades.sql`. Esquema en `data/schema.sql`.
+## Datos
+- `data/schema.sql`: tablas `propiedades`, `leads` y `eventos_equipo`.
+- `data/seed_propiedades.sql`: 20 propiedades sintéticas de Bariloche para la demo.
+- `data/plantilla-propiedades.csv`: la planilla que completa la inmobiliaria. Se carga con
+  `npm run importar -- archivo.csv --desactivar-faltantes`, que valida todo antes de escribir.
 
 ---
 🎥 Video (60-90 s): _pendiente_ · Parte del [portfolio de automatización n8n](https://github.com/tahielt).

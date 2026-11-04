@@ -3,12 +3,12 @@
   "nodes": [
     {
       "id": "wa_in",
-      "name": "WhatsApp In",
+      "name": "Chatwoot webhook",
       "webhookId": "2bf7ee50-35b9-4076-b8ab-52f1de0999e0",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -620,
+        -840,
         300
       ],
       "parameters": {
@@ -21,50 +21,15 @@
     {
       "id": "norm",
       "name": "Normalizar entrada",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.5,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        -400,
+        -620,
         300
       ],
       "parameters": {
-        "mode": "manual",
-        "assignments": {
-          "assignments": [
-            {
-              "id": "a1",
-              "name": "session_id",
-              "type": "string",
-              "value": "={{ $json.body.session_id }}"
-            },
-            {
-              "id": "a2",
-              "name": "texto",
-              "type": "string",
-              "value": "={{ $json.body.texto }}"
-            },
-            {
-              "id": "a3",
-              "name": "message_id",
-              "type": "string",
-              "value": "={{ $json.body.message_id }}"
-            },
-            {
-              "id": "a4",
-              "name": "nota_privada",
-              "type": "string",
-              "value": "={{ $json.body.nota_privada || '' }}"
-            },
-            {
-              "id": "a5",
-              "name": "umbral_usd",
-              "type": "number",
-              "value": 400000
-            }
-          ]
-        },
-        "includeOtherFields": false,
-        "options": {}
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ── Config: lo único que se toca por cliente ─────────────────────────────────\nconst CHATWOOT_URL = 'https://chatwoot.example'; // URL de tu Chatwoot, sin barra final\nconst INBOX_ID = null;      // id del inbox de WhatsApp de esta inmobiliaria (null = todos los inboxes)\nconst UMBRAL_USD = 400000;  // presupuesto desde el que deriva a un asesor\n\n// ── Webhook de Chatwoot (evento message_created) ─────────────────────────────\n// Entra: mensajes del cliente (incoming) y notas privadas /ia on|off de un asesor.\n// Se ignora todo lo demás, incluidos los mensajes y notas que manda este mismo flujo (eco).\nconst b = $json.body ?? {};\nconst conv = b.conversation ?? {};\nconst contenido = String(b.content ?? '').trim();\nconst entrante = (b.message_type === 'incoming' || b.message_type === 0) && !b.private;\nconst esComando = b.private === true && /^\\/ia\\b/i.test(contenido);\nconst adjuntos = (b.attachments ?? []).length > 0;\nconst texto = contenido || (entrante && adjuntos ? '[El cliente mandó un audio, foto o archivo. Pedile que te lo escriba.]' : '');\nconst inbox = b.inbox?.id ?? conv.inbox_id;\nconst ignorar = b.event !== 'message_created'\n  || (INBOX_ID != null && Number(inbox) !== Number(INBOX_ID))\n  || !(esComando || (entrante && texto));\nconst contacto = conv.meta?.sender ?? (entrante ? b.sender : null) ?? {};\nconst tel = String(contacto.phone_number ?? conv.contact_inbox?.source_id ?? '').replace(/\\D/g, '');\n\nreturn {\n  ignorar,\n  session_id: tel ? 'wa:' + tel : 'cw:' + conv.id,\n  texto,\n  message_id: String(b.id ?? ''),\n  nota_privada: esComando ? contenido : '',\n  conversation_id: conv.id,\n  account_id: b.account?.id,\n  chatwoot_url: CHATWOOT_URL,\n  umbral_usd: UMBRAL_USD,\n};"
       }
     },
     {
@@ -441,7 +406,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Patrón 3: partir la respuesta en mensajes de <=250 caracteres.\nconst src = $('Verificador anti-alucinación').first().json;\nconst msg = (src.mensaje ?? '').trim();\nconst session_id = src.session_id;\nconst partes = [];\nlet resto = msg;\nwhile (resto.length > 250) {\n  let corte = resto.lastIndexOf(' ', 250);\n  if (corte < 100) corte = 250;\n  partes.push(resto.slice(0, corte).trim());\n  resto = resto.slice(corte).trim();\n}\nif (resto) partes.push(resto);\nreturn partes.map((p, i) => ({ json: { session_id, parte: p, idx: i + 1, total: partes.length } }));"
+        "jsCode": "// Patrón 3: partir la respuesta en mensajes de <=250 caracteres.\nconst src = $('Verificador anti-alucinación').first().json;\nconst msg = (src.mensaje ?? '').trim();\nconst e = $('Normalizar entrada').first().json;\nconst { session_id } = src;\nconst destino = { session_id, conversation_id: e.conversation_id, account_id: e.account_id, chatwoot_url: e.chatwoot_url };\nconst partes = [];\nlet resto = msg;\nwhile (resto.length > 250) {\n  let corte = resto.lastIndexOf(' ', 250);\n  if (corte < 100) corte = 250;\n  partes.push(resto.slice(0, corte).trim());\n  resto = resto.slice(corte).trim();\n}\nif (resto) partes.push(resto);\nreturn partes.map((p, i) => ({ json: { ...destino, parte: p, idx: i + 1, total: partes.length } }));"
       }
     },
     {
@@ -471,7 +436,7 @@
     },
     {
       "id": "http_typing",
-      "name": "Typing… (simulado)",
+      "name": "Chatwoot: escribiendo…",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "continueOnFail": false,
@@ -482,10 +447,12 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "https://chatwoot.example/api/typing",
+        "url": "={{ $('Enviar de a uno').item.json.chatwoot_url }}/api/v1/accounts/{{ $('Enviar de a uno').item.json.account_id }}/conversations/{{ $('Enviar de a uno').item.json.conversation_id }}/toggle_typing_status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { session_id: $('Enviar de a uno').item.json.session_id, status: 'typing_on' } }}",
+        "jsonBody": "={{ { typing_status: 'on' } }}",
         "options": {}
       }
     },
@@ -506,7 +473,7 @@
     },
     {
       "id": "http_send",
-      "name": "Enviar mensaje (simulado)",
+      "name": "Chatwoot: enviar mensaje",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "continueOnFail": false,
@@ -517,10 +484,12 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "https://chatwoot.example/api/messages",
+        "url": "={{ $('Enviar de a uno').item.json.chatwoot_url }}/api/v1/accounts/{{ $('Enviar de a uno').item.json.account_id }}/conversations/{{ $('Enviar de a uno').item.json.conversation_id }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { session_id: $('Enviar de a uno').item.json.session_id, text: $('Enviar de a uno').item.json.parte } }}",
+        "jsonBody": "={{ { content: $('Enviar de a uno').item.json.parte, message_type: 'outgoing', private: false } }}",
         "options": {}
       }
     },
@@ -570,25 +539,79 @@
         500
       ],
       "id": "buf-limpiar"
+    },
+    {
+      "id": "if_ignorar",
+      "name": "¿Ignorar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ci1",
+              "leftValue": "={{ $json.ignorar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "noop_ignorar",
+      "name": "Fin (ignorado)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        100
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "http_nota",
+      "name": "Chatwoot: nota privada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        2280,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Normalizar entrada').item.json.chatwoot_url }}/api/v1/accounts/{{ $('Normalizar entrada').item.json.account_id }}/conversations/{{ $('Normalizar entrada').item.json.conversation_id }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { content: '🤖 IA pausada en esta conversación.\\nMotivo: ' + $('Verificador anti-alucinación').item.json.motivo + '\\n\\nCuando termines, mandá la nota privada \"/ia on\" para que vuelva a atender.', message_type: 'outgoing', private: true } }}",
+        "options": {}
+      }
     }
   ],
   "connections": {
-    "WhatsApp In": {
-      "main": [
-        [
-          {
-            "node": "Normalizar entrada",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Normalizar entrada": {
       "main": [
         [
           {
-            "node": "¿Comando /ia?",
+            "node": "¿Ignorar?",
             "type": "main",
             "index": 0
           }
@@ -792,7 +815,7 @@
       "main": [
         [
           {
-            "node": "Partir en mensajes (≤250)",
+            "node": "Chatwoot: nota privada",
             "type": "main",
             "index": 0
           }
@@ -821,18 +844,7 @@
         ],
         [
           {
-            "node": "Typing… (simulado)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Typing… (simulado)": {
-      "main": [
-        [
-          {
-            "node": "Pausa ~3s",
+            "node": "Chatwoot: escribiendo…",
             "type": "main",
             "index": 0
           }
@@ -843,18 +855,7 @@
       "main": [
         [
           {
-            "node": "Enviar mensaje (simulado)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Enviar mensaje (simulado)": {
-      "main": [
-        [
-          {
-            "node": "Enviar de a uno",
+            "node": "Chatwoot: enviar mensaje",
             "type": "main",
             "index": 0
           }
@@ -888,6 +889,68 @@
         [
           {
             "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chatwoot webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalizar entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chatwoot: escribiendo…": {
+      "main": [
+        [
+          {
+            "node": "Pausa ~3s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chatwoot: enviar mensaje": {
+      "main": [
+        [
+          {
+            "node": "Enviar de a uno",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ignorar?": {
+      "main": [
+        [
+          {
+            "node": "Fin (ignorado)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿Comando /ia?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chatwoot: nota privada": {
+      "main": [
+        [
+          {
+            "node": "Partir en mensajes (≤250)",
             "type": "main",
             "index": 0
           }

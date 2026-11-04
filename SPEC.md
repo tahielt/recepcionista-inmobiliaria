@@ -9,13 +9,16 @@ catálogo** (nunca inventadas), con traspaso a humano y un **verificador anti-al
 bloquea cualquier precio o link que no haya salido de una herramienta en ese turno.
 
 ## Alcance funcional
-1. **Entrada WhatsApp** vía webhook (simula Chatwoot): `{ session_id, texto, message_id, nota_privada }`.
+1. **Entrada WhatsApp** vía webhook de Chatwoot (`message_created`; WhatsApp conectado con Evolution API).
+   Solo procesa mensajes `incoming` del cliente y notas privadas `/ia on|off`; ignora el eco del propio
+   bot, otros inboxes (`INBOX_ID`) y actividades. `session_id = wa:<teléfono del contacto>`.
+   Salida por la API de Chatwoot: `toggle_typing_status`, mensajes y notas privadas al equipo.
 2. **Precalificación** (slots): `operacion` (compra/alquiler), `zona`, `presupuesto_usd`,
    `ambientes`, `forma_pago`, `urgencia`. Se persisten en `leads`; no se vuelve a preguntar lo ya sabido.
 3. **Búsqueda en catálogo** (`propiedades` en Postgres/Supabase): filtra por operación, zona,
    dormitorios/ambientes y presupuesto. Devuelve máximo 3, con código, precio y `url_ficha`.
 4. **Derivación a humano** si `presupuesto_usd > UMBRAL` (def. 400.000 USD) o el cliente lo pide:
-   marca `derivado`, pausa la IA y deja nota privada al equipo.
+   marca `derivado`, pausa la IA y deja nota privada en Chatwoot con el motivo.
 
 ## Patrones reusados (de PATRONES.md)
 - **Patrón 1 — Buffer de mensajes:** Redis push a `buf:<session>` → Wait 7 s → compara último
@@ -43,7 +46,8 @@ bloquea cualquier precio o link que no haya salido de una herramienta en ese tur
 - `data/seed_propiedades.sql` — 20 propiedades sintéticas de Bariloche (venta y alquiler, USD).
 
 ## Credenciales
-- **Postgres/Supabase** (catálogo + leads) · **Redis** (buffer + memoria) · **OpenRouter** (LLM).
+- **Postgres/Supabase** (catálogo + leads) · **Redis** (buffer + memoria) · **OpenRouter** (LLM) ·
+  **Header Auth** `api_access_token` (API de Chatwoot).
 - Postgres y Redis (locales, del docker-compose) se crean automático por el MCP. OpenRouter
   necesita tu API key (gratis de sacar). Ningún secreto va escrito en el flujo ni en el repo:
   queda encriptado en la base de n8n; el JSON solo guarda la referencia por nombre.

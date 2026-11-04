@@ -1,32 +1,43 @@
 # Payloads de prueba (webhook `POST /webhook/wa-recepcionista`)
 
-Todos sintéticos. El `session_id` simula el número de WhatsApp.
+El flujo recibe el webhook de Chatwoot (`message_created`). Para probarlo sin WhatsApp, mandá
+estos JSON con curl a la URL del webhook. Son el formato real de Chatwoot, recortado a los
+campos que usa el flujo. Para que la respuesta llegue, `conversation.id` tiene que ser una
+conversación existente en tu Chatwoot.
 
-### 1. Lead nuevo (precalificación)
-```json
-{ "session_id": "wa:5492944000001", "message_id": "m1", "texto": "Hola, busco depto 2 ambientes en el centro, hasta 130 mil dólares", "nota_privada": "" }
+```bash
+curl -X POST https://TU-N8N/webhook/wa-recepcionista -H 'Content-Type: application/json' -d @mensaje.json
 ```
 
-### 2. Pide ver propiedades (dispara buscar_propiedades)
+### 1. Mensaje del cliente (precalificación y búsqueda)
 ```json
-{ "session_id": "wa:5492944000001", "message_id": "m2", "texto": "¿Qué tenés en venta en Melipal?", "nota_privada": "" }
+{
+  "event": "message_created", "id": 1001, "content": "Hola, busco depto 2 ambientes en el centro, hasta 130 mil dólares",
+  "message_type": "incoming", "private": false, "attachments": [],
+  "sender": { "id": 5, "name": "Cliente Demo", "phone_number": "+5492944000001", "type": "contact" },
+  "account": { "id": 1 }, "inbox": { "id": 3 },
+  "conversation": { "id": 42, "inbox_id": 3, "meta": { "sender": { "id": 5, "phone_number": "+5492944000001" } } }
+}
 ```
 
-### 3. Derivación por intención (quiere coordinar visita)
+### 2. Derivación por intención
+Igual que el 1, con otro `id` y `"content": "Me encanta, quiero coordinar una visita"`.
+El bot responde, se pausa y deja una nota privada en la conversación.
+
+### 3. Pausa humana (nota privada de un asesor)
 ```json
-{ "session_id": "wa:5492944000001", "message_id": "m3", "texto": "Me encanta, quiero coordinar una visita", "nota_privada": "" }
+{
+  "event": "message_created", "id": 1003, "content": "/ia off",
+  "message_type": "outgoing", "private": true, "attachments": [],
+  "sender": { "id": 7, "name": "Asesora", "type": "user" },
+  "account": { "id": 1 }, "inbox": { "id": 3 },
+  "conversation": { "id": 42, "inbox_id": 3, "meta": { "sender": { "id": 5, "phone_number": "+5492944000001" } } }
+}
 ```
+Para reactivarlo, mandá lo mismo con `"content": "/ia on"`.
 
-### 4. Pausa humana — un asesor toma el chat (nota privada)
-```json
-{ "session_id": "wa:5492944000001", "message_id": "m4", "texto": "", "nota_privada": "/ia off" }
-```
-Reactivar: `"nota_privada": "/ia on"`.
+### 4. Caso del VIDEO: intento de precio inventado
+Pedí "un precio aproximado" de una zona sin stock. El **verificador anti-alucinación** bloquea la
+respuesta, le contesta al cliente que lo confirma un asesor y deja una nota privada con el motivo.
 
-### 5. Caso del VIDEO — intento de precio inventado
-Mandá un mensaje que empuje al bot a tirar un precio que no está en el catálogo
-(p. ej. preguntar por una zona sin stock y pedir "un precio aproximado").
-El **Verificador anti-alucinación** bloquea la respuesta y responde
-"prefiero no pasarte un dato sin confirmarlo" + deja nota al equipo.
-
-> Estos escenarios (y más) corren automáticamente en n8n con `npm run test:e2e`: ver README → "Probado en n8n".
+> Estos escenarios, y más, corren automáticamente en n8n con `npm run test:e2e`: ver README → "Probado en n8n".

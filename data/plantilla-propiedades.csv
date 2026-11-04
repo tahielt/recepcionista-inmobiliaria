@@ -1,0 +1,3 @@
+codigo,titulo,operacion,tipo,zona,ambientes,dormitorios,m2_cubiertos,precio_usd,expensas_usd,direccion_aprox,descripcion,url_ficha,destacada,activa
+ABC-001,Departamento 2 ambientes con balcón,venta,departamento,Centro,2,1,48,125000,60,Elflein al 200,"Luminoso, cocina integrada, apto crédito.",https://tu-inmobiliaria.com/propiedades/ABC-001,no,si
+ABC-002,Cabaña en alquiler mensual,alquiler,cabaña,Melipal,3,2,70,900,,Av. Bustillo km 4,Con leña y vista al lago.,https://tu-inmobiliaria.com/propiedades/ABC-002,si,si

@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:e2e": "node test/e2e/run.js"
+    "test:e2e": "node test/e2e/run.js",
+    "importar": "node scripts/importar-propiedades.js"
   },
-  "devDependencies": { "pg": "^8.13.0" }
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
 }
