@@ -4,19 +4,19 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pg from 'pg';
-import { aplicarEsquema, asignarCredenciales, clienteChatwoot, compose, conexionInmo, credencialesParaImportar, leerEnv, WEBHOOK_N8N } from './lib.js';
+import { aplicarEsquema, asignarCredenciales, clienteChatwoot, compose, conexionInmo, credencialesParaImportar, leerEnv, urlLocal, WEBHOOK_N8N } from './lib.js';
 
 const SECRETOS = ['POSTGRES_PASSWORD', 'REDIS_PASSWORD', 'N8N_ENCRYPTION_KEY', 'N8N_RUNNERS_AUTH_TOKEN', 'CHATWOOT_SECRET_KEY_BASE', 'EVOLUTION_API_KEY'];
 const ID_FLUJO = 'recepcionistaIA';
 const paso = (t) => console.log(`\n▸ ${t}`);
 
-// 1. .env: si no existe, se crea desde .env.example con secretos nuevos.
+// 1. .env: si no existe, se crea desde .env.example. Los secretos vacíos se generan (nunca se pisan los cargados).
 paso('Configuración (.env)');
-if (!existsSync('.env')) {
-  const plantilla = readFileSync('.env.example', 'utf8');
-  writeFileSync('.env', plantilla.replace(/^([A-Z0-9_]+)=$/gm, (l, k) => (SECRETOS.includes(k) ? `${k}=${randomBytes(32).toString('hex')}` : l)));
-  console.log('  .env creado con secretos generados');
-} else console.log('  uso el .env existente');
+const texto = existsSync('.env') ? readFileSync('.env', 'utf8') : readFileSync('.env.example', 'utf8');
+const generados = [];
+const nuevo = texto.replace(/^([A-Z0-9_]+)=$/gm, (l, k) => (SECRETOS.includes(k) ? (generados.push(k), `${k}=${randomBytes(32).toString('hex')}`) : l));
+if (!existsSync('.env') || generados.length) writeFileSync('.env', nuevo, { mode: 0o600 });
+console.log(generados.length ? `  secretos generados: ${generados.join(', ')}` : '  uso el .env existente');
 const env = leerEnv();
 const sinValor = SECRETOS.filter((k) => !env[k]);
 if (sinValor.length) throw new Error(`Faltan en .env: ${sinValor.join(', ')} (generalos con openssl rand -hex 32)`);
@@ -33,7 +33,7 @@ console.log('  ' + aplicarEsquema(env).join(' · '));
 if (!env.CHATWOOT_API_TOKEN || !env.OPENROUTER_API_KEY) {
   console.log(`
 Falta lo manual (una sola vez):
-  1. Abrí http://localhost:3000 y creá tu usuario administrador de Chatwoot.
+  1. Abrí ${env.CHATWOOT_URL_PUBLICA || urlLocal(env).chatwoot} y creá tu usuario administrador de Chatwoot.
   2. En Chatwoot → tu perfil → Access Token: copialo en .env como CHATWOOT_API_TOKEN.
   3. Pegá tu API key de OpenRouter en .env como OPENROUTER_API_KEY.
 Después corré otra vez: npm run instalar`);
@@ -90,6 +90,6 @@ await db.connect();
 const { rows: [{ n }] } = await db.query('SELECT count(*)::int AS n FROM clientes WHERE activo');
 await db.end();
 console.log(`
-✓ Listo. Chatwoot: http://localhost:3000 · n8n: http://localhost:5678 · ${n} inmobiliaria(s) activa(s)
+✓ Listo. Chatwoot: ${env.CHATWOOT_URL_PUBLICA || urlLocal(env).chatwoot} · n8n: ${env.N8N_URL_PUBLICA || urlLocal(env).n8n} · ${n} inmobiliaria(s) activa(s)
   Alta de una inmobiliaria (WhatsApp + QR): npm run nuevo-cliente -- "Nombre"
   Estado de todas:                          npm run clientes`);

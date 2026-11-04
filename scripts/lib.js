@@ -40,16 +40,20 @@ export async function api(url, { metodo = 'GET', headers = {}, cuerpo } = {}, in
   return texto ? JSON.parse(texto) : null;
 }
 
-// ── Servicios del stack (desde la PC; los puertos están en docker-compose.yml) ──
-export const URL_LOCAL = { chatwoot: 'http://127.0.0.1:3000', evolution: 'http://127.0.0.1:8080' };
+// ── Servicios del stack (desde la PC o el VPS; puertos de .env, como en docker-compose.yml) ──
+export const urlLocal = (env) => ({
+  chatwoot: `http://127.0.0.1:${env.CHATWOOT_PUERTO || 3000}`,
+  n8n: `http://127.0.0.1:${env.N8N_PUERTO || 5678}`,
+  evolution: `http://127.0.0.1:${env.EVOLUTION_PUERTO || 8080}`,
+});
 // Entre contenedores, por la red interna de Docker:
 export const URL_INTERNA = { chatwoot: 'http://chatwoot-web:3000', n8n: 'http://n8n:5678', evolution: 'http://evolution:8080' };
 export const WEBHOOK_N8N = `${URL_INTERNA.n8n}/webhook/wa-recepcionista`;
 
 export const clienteChatwoot = (env) => (ruta, opciones = {}) =>
-  api(URL_LOCAL.chatwoot + ruta, { ...opciones, headers: { api_access_token: env.CHATWOOT_API_TOKEN } });
+  api(urlLocal(env).chatwoot + ruta, { ...opciones, headers: { api_access_token: env.CHATWOOT_API_TOKEN } });
 export const clienteEvolution = (env) => (ruta, opciones = {}) =>
-  api(URL_LOCAL.evolution + ruta, { ...opciones, headers: { apikey: env.EVOLUTION_API_KEY } });
+  api(urlLocal(env).evolution + ruta, { ...opciones, headers: { apikey: env.EVOLUTION_API_KEY } });
 
 // ── n8n ──────────────────────────────────────────────────────────────────────
 // Tipo de nodo → credencial que usa (los nombres de tipo son los de n8n).

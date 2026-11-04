@@ -114,7 +114,9 @@ hace falta instalar n8n. El test usa sus propios Postgres y Redis (`docker-compo
 - **La derivación por presupuesto alto no existía:** ahora cada inmobiliaria tiene su umbral (`clientes.umbral_usd`, 400.000 por defecto).
 
 ## Ponerlo en producción
-Paso a paso (stack, base, Evolution, Chatwoot, credenciales, webhook y túnel): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+- Instalación y operación (stack, clientes, catálogo, túnel): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+- VPS con Dokploy, DNS en Cloudflare, HTTPS, backups diarios y actualizaciones: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+- Alta de una inmobiliaria en menos de 30 minutos: **[docs/ALTA-CLIENTE.md](docs/ALTA-CLIENTE.md)**.
 Para probar el webhook a mano sin WhatsApp: `workflows/payloads-de-prueba.md`.
 
 ## Datos
