@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import pg from 'pg';
 import { iniciarLLM, pedidos } from './fake-llm.js';
+import { asignarCredenciales, credencialesParaImportar } from '../../scripts/lib.js';
 
 const N8N = process.env.N8N_BIN ?? 'n8n';
 const PUERTOS = { n8n: 5690, llm: 4010, wa: 4020 }; // 5679 lo usa el task broker de n8n
@@ -45,20 +46,14 @@ const CREDS = {
   openRouterApi: { id: 'cred-llm', name: 'LLM falso (e2e)', data: { apiKey: 'e2e', url: `http://127.0.0.1:${PUERTOS.llm}/v1` } },
   httpHeaderAuth: { id: 'cred-cw', name: 'Chatwoot API (e2e)', data: { name: 'api_access_token', value: 'token-e2e' } },
 };
-const credPorTipo = { postgres: 'postgres', postgresTool: 'postgres', redis: 'redis', memoryRedisChat: 'redis', lmChatOpenRouter: 'openRouterApi', httpRequest: 'httpHeaderAuth' };
-
 function prepararFlujo() {
   const wf = JSON.parse(readFileSync(archivo, 'utf8').replaceAll('https://chatwoot.example', `http://127.0.0.1:${PUERTOS.wa}`));
-  for (const n of wf.nodes) {
-    const tipo = credPorTipo[n.type.split('.').pop()];
-    if (tipo) n.credentials = { [tipo]: { id: CREDS[tipo].id, name: CREDS[tipo].name } };
-  }
-  return { ...wf, id: 'recepcionistaE2E', active: false };
+  return { ...asignarCredenciales(wf, CREDS), id: 'recepcionistaE2E', active: false };
 }
 
 function importar() {
   const credsFile = join(carpeta, 'creds.json'), wfFile = join(carpeta, 'wf.json');
-  writeFileSync(credsFile, JSON.stringify(Object.entries(CREDS).map(([type, c]) => ({ ...c, type }))));
+  writeFileSync(credsFile, JSON.stringify(credencialesParaImportar(CREDS)));
   writeFileSync(wfFile, JSON.stringify(prepararFlujo()));
   for (const args of [['import:credentials', `--input=${credsFile}`], ['import:workflow', `--input=${wfFile}`], ['publish:workflow', '--id=recepcionistaE2E']]) {
     execFileSync(N8N, args, { env, stdio: 'pipe' });
@@ -147,6 +142,12 @@ const ESCENARIOS = [
     ] },
   { nombre: 'Eco: ignora los mensajes y notas que salen de Chatwoot', c: contacto(),
     pasos: [[0, 'Te escribe la asesora ECO1', 'eco'], [0, '🤖 IA pausada ECO2', 'eco-nota']],
+    chequear: (c) => [
+      ['no llama al modelo', c.llm.length === 0, c.llm.map((p) => p.user).join(' | ')],
+      ['no responde ni escribe', c.enviados.length === 0, JSON.stringify(c.enviados)],
+    ] },
+  { nombre: 'Bot de Evolution: ignora el QR y el estado de la conexión', c: { ...contacto(), tel: '+123456' },
+    pasos: [[0, 'QRCode generated BOTQR1']],
     chequear: (c) => [
       ['no llama al modelo', c.llm.length === 0, c.llm.map((p) => p.user).join(' | ')],
       ['no responde ni escribe', c.enviados.length === 0, JSON.stringify(c.enviados)],

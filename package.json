@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "instalar": "node scripts/instalar.js",
     "test:e2e": "node test/e2e/run.js",
     "importar": "node scripts/importar-propiedades.js"
   },
   "dependencies": {
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }

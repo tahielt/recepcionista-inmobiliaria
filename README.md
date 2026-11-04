@@ -58,9 +58,12 @@ sidekiq), con healthchecks y volúmenes. Si querés exponerlo, hay un túnel de 
 Usa ~1,6 GB de RAM en reposo, así que entra en una PC de 8 GB.
 
 ```bash
-cp .env.example .env    # completá los secretos
-docker compose up -d --wait
+npm install
+npm run instalar   # idempotente: stack, base, webhook, WhatsApp, flujo de n8n y QR
 ```
+
+Lo único manual: crear el admin de Chatwoot, pegar 2 tokens en `.env` (Chatwoot y OpenRouter) y
+escanear el QR. El script te dice cuándo.
 
 ## Probado en n8n (end-to-end)
 
@@ -76,6 +79,7 @@ docker compose up -d --wait
 | Visita | responde, deriva, pausa y deja nota privada con el motivo |
 | Presupuesto alto | más de USD 400.000 → deriva a un asesor |
 | Eco | ignora los mensajes y notas que salen de Chatwoot (incluidos los del propio bot) |
+| Bot de Evolution | ignora la conversación con "EvolutionAPI", donde Evolution manda el QR y el estado de la conexión |
 | Autenticación | todas las llamadas a la API de Chatwoot llevan `api_access_token` |
 
 ```bash

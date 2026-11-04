@@ -23,6 +23,8 @@ x-chatwoot: &chatwoot
     REDIS_URL: redis://redis:6379/0
     REDIS_PASSWORD: ${REDIS_PASSWORD}
     SIDEKIQ_CONCURRENCY: ${CHATWOOT_SIDEKIQ_CONCURRENCY:-5}
+    # Chatwoot 4 bloquea webhooks a IPs privadas; los nuestros van por la red interna (n8n y evolution).
+    SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
   volumes:
     - chatwoot_storage:/app/storage
 
