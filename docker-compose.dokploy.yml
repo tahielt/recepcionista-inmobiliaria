@@ -1,0 +1,39 @@
+# Producción en un VPS con Dokploy: el Traefik de Dokploy publica chat., n8n. y evo. con HTTPS (Let's Encrypt).
+# Se suma al compose principal con COMPOSE_FILE en .env (ver docs/DEPLOY.md):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dokploy.yml
+# Labels del "método manual" de la doc de Dokploy: red dokploy-network, entrypoint websecure, certResolver letsencrypt.
+services:
+  chatwoot-web:
+    networks: [default, dokploy-network]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.recepcionista-chat.rule=Host(`${DOMINIO_CHAT:?falta DOMINIO_CHAT en .env}`)
+      - traefik.http.routers.recepcionista-chat.entrypoints=websecure
+      - traefik.http.routers.recepcionista-chat.tls.certResolver=letsencrypt
+      - traefik.http.services.recepcionista-chat.loadbalancer.server.port=3000
+
+  n8n:
+    networks: [default, dokploy-network]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      # Solo el editor: los webhooks quedan en la red interna (Chatwoot llama a http://n8n:5678/webhook/…).
+      - traefik.http.routers.recepcionista-n8n.rule=Host(`${DOMINIO_N8N:?falta DOMINIO_N8N en .env}`) && !PathPrefix(`/webhook`)
+      - traefik.http.routers.recepcionista-n8n.entrypoints=websecure
+      - traefik.http.routers.recepcionista-n8n.tls.certResolver=letsencrypt
+      - traefik.http.services.recepcionista-n8n.loadbalancer.server.port=5678
+
+  evolution:
+    networks: [default, dokploy-network]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.recepcionista-evo.rule=Host(`${DOMINIO_EVO:?falta DOMINIO_EVO en .env}`)
+      - traefik.http.routers.recepcionista-evo.entrypoints=websecure
+      - traefik.http.routers.recepcionista-evo.tls.certResolver=letsencrypt
+      - traefik.http.services.recepcionista-evo.loadbalancer.server.port=8080
+
+networks:
+  dokploy-network:
+    external: true

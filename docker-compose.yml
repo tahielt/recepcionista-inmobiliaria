@@ -1,0 +1,208 @@
+# Stack completo del recepcionista: docker compose up -d --wait
+# Variables en .env (copiá .env.example). Solo se publica en 127.0.0.1; afuera se sale con el túnel.
+name: recepcionista
+
+x-chatwoot: &chatwoot
+  image: chatwoot/chatwoot:${CHATWOOT_VERSION:-v4.19.1}
+  restart: unless-stopped
+  environment:
+    RAILS_ENV: production
+    NODE_ENV: production
+    INSTALLATION_ENV: docker
+    RAILS_LOG_TO_STDOUT: "true"
+    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?falta CHATWOOT_SECRET_KEY_BASE en .env}
+    FRONTEND_URL: ${CHATWOOT_URL_PUBLICA:-http://localhost:3000}
+    DEFAULT_LOCALE: es
+    ENABLE_ACCOUNT_SIGNUP: "false"
+    FORCE_SSL: "false"
+    ACTIVE_STORAGE_SERVICE: local
+    POSTGRES_HOST: postgres
+    POSTGRES_USERNAME: ${POSTGRES_USER:-postgres}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DATABASE: chatwoot
+    REDIS_URL: redis://redis:6379/0
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    SIDEKIQ_CONCURRENCY: ${CHATWOOT_SIDEKIQ_CONCURRENCY:-5}
+    # Chatwoot 4 bloquea webhooks a IPs privadas; los nuestros van por la red interna (n8n y evolution).
+    SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
+  volumes:
+    - chatwoot_storage:/app/storage
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17 # pgvector: lo pide Chatwoot 4 · 17+: lo pide n8n 2.x
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports: ["127.0.0.1:${POSTGRES_PUERTO:-5433}:5432"] # para npm run importar desde la PC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?falta REDIS_PASSWORD en .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.46.4}
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?falta N8N_ENCRYPTION_KEY en .env}
+      N8N_EDITOR_BASE_URL: ${N8N_URL_PUBLICA:-http://localhost:5678}
+      N8N_WEBHOOK_URL: ${N8N_URL_PUBLICA:-http://localhost:5678}
+      N8N_LISTEN_ADDRESS: 0.0.0.0 # sin esto intenta "::" y falla si Docker no tiene IPv6
+      N8N_PROXY_HOPS: 1
+      N8N_RUNNERS_MODE: external
+      N8N_RUNNERS_AUTH_TOKEN: ${N8N_RUNNERS_AUTH_TOKEN:?falta N8N_RUNNERS_AUTH_TOKEN en .env}
+      N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 0.0.0.0
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # El flujo lee la URL de Chatwoot de acá ($env.CHATWOOT_URL); n8n 2.x bloquea $env por defecto.
+      CHATWOOT_URL: http://chatwoot-web:3000
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      GENERIC_TIMEZONE: ${TZ:-America/Argentina/Buenos_Aires}
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports: ["127.0.0.1:${N8N_PUERTO:-5678}:5678"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz/readiness >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  n8n-runner: # ejecuta los nodos Code (modo external, el recomendado en n8n 2.x)
+    image: n8nio/runners:${N8N_VERSION:-2.46.4}
+    restart: unless-stopped
+    environment:
+      N8N_RUNNERS_AUTH_TOKEN: ${N8N_RUNNERS_AUTH_TOKEN}
+      N8N_RUNNERS_TASK_BROKER_URI: http://n8n:5679
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    depends_on:
+      n8n: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5680/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  evolution:
+    image: evoapicloud/evolution-api:${EVOLUTION_VERSION:-v2.3.7}
+    restart: unless-stopped
+    environment:
+      SERVER_URL: ${EVOLUTION_URL:-http://evolution:8080} # Chatwoot le manda los mensajes salientes acá
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?falta EVOLUTION_API_KEY en .env}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=evolution_api
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_LOCAL_ENABLED: "false"
+      CHATWOOT_ENABLED: "true"
+      CHATWOOT_MESSAGE_READ: "true"
+      CHATWOOT_MESSAGE_DELETE: "true"
+      CHATWOOT_IMPORT_DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/chatwoot?sslmode=disable
+      CONFIG_SESSION_PHONE_CLIENT: Recepcionista
+      DEL_INSTANCE: "false"
+      LANGUAGE: es # mensajes de la integración en Chatwoot (dist/translations/es.json)
+      TELEMETRY_ENABLED: "false"
+      LOG_LEVEL: ERROR,WARN,INFO
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    volumes:
+      - evolution_instances:/evolution/instances
+    ports: ["127.0.0.1:${EVOLUTION_PUERTO:-8080}:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  chatwoot-init: # prepara la base (schema + migraciones) y termina; idempotente
+    <<: *chatwoot
+    restart: "no"
+    command: ["bundle", "exec", "rails", "db:chatwoot_prepare"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  chatwoot-web:
+    <<: *chatwoot
+    entrypoint: docker/entrypoints/rails.sh # borra el server.pid viejo, como el compose oficial
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    ports: ["127.0.0.1:${CHATWOOT_PUERTO:-3000}:3000"] # en un VPS con Dokploy, el 3000 es de Dokploy
+    depends_on:
+      chatwoot-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api | grep -q '\"data_services\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  chatwoot-sidekiq:
+    <<: *chatwoot
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    depends_on:
+      chatwoot-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7433/ >/dev/null"] # SidekiqAlive, viene en Chatwoot
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ── Túnel de Cloudflare (opcional) ──────────────────────────────────────────
+  # Con dominio: docker compose --profile tunel up -d  (hostnames en el panel de Cloudflare)
+  tunel:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.7}
+    profiles: [tunel]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [chatwoot-web, n8n]
+
+  # Sin dominio: docker compose --profile tunel-rapido up -d  → URL *.trycloudflare.com en los logs
+  tunel-rapido:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.7}
+    profiles: [tunel-rapido]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--url", "http://chatwoot-web:3000"]
+    depends_on: [chatwoot-web]
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:
+  evolution_instances:
+  chatwoot_storage:

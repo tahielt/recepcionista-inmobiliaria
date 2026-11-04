@@ -3,7 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "instalar": "node scripts/instalar.js",
+    "nuevo-cliente": "node scripts/nuevo-cliente.js",
+    "clientes": "node scripts/clientes.js",
+    "importar": "node scripts/importar-propiedades.js",
+    "demo": "node scripts/demo.js",
+    "backup": "sh scripts/backup.sh",
     "test:e2e": "node test/e2e/run.js"
   },
-  "devDependencies": { "pg": "^8.13.0" }
+  "dependencies": {
+    "pg": "^8.13.0",
+    "qrcode-terminal": "^0.12.0"
+  }
 }
