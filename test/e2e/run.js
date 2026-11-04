@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import pg from 'pg';
 import { iniciarLLM, pedidos } from './fake-llm.js';
-import { asignarCredenciales, credencialesParaImportar } from '../../scripts/lib.js';
+import { asignarCredenciales, cargarPropiedadesSql, credencialesParaImportar } from '../../scripts/lib.js';
 
 const N8N = process.env.N8N_BIN ?? 'n8n';
 const PUERTOS = { n8n: 5690, llm: 4010, wa: 4020 }; // 5679 lo usa el task broker de n8n
@@ -291,6 +291,12 @@ try {
       console.log(`  ${ok ? '✓' : '✗'} ${desc}${ok ? '' : `\n      → ${String(detalle ?? '').replaceAll('\n', ' ⏎ ').slice(0, 300)}`}`);
     }
   }
+  // Demo (npm run demo): data/seed_propiedades.sql se carga en un cliente; dos veces = upsert, sin duplicar ni tocar a otros.
+  for (let i = 0; i < 2; i++) await cargarPropiedadesSql(db, 3, readFileSync('data/seed_propiedades.sql', 'utf8'));
+  const { rows: [demo] } = await db.query('SELECT (SELECT count(*) FROM propiedades WHERE cliente_id = 3)::int AS demo, (SELECT count(*) FROM propiedades WHERE cliente_id = 2)::int AS otro');
+  const demoOk = demo.demo === 20 && demo.otro === 2;
+  console.log(`Demo: ${demoOk ? '✓' : '✗'} el seed carga 20 propiedades en un cliente sin duplicar ni tocar a otro ${demoOk ? '' : JSON.stringify(demo)}`);
+  if (!demoOk) fallas++;
   const sinToken = enviados.filter((x) => x.token !== 'token-e2e');
   console.log(`Chatwoot API: ${enviados.length} llamadas, ${sinToken.length ? `✗ ${sinToken.length} sin api_access_token` : '✓ todas con api_access_token'}`);
   if (sinToken.length) fallas++;

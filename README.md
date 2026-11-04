@@ -1,130 +1,148 @@
-# 🏡 Recepcionista IA Inmobiliaria (WhatsApp + n8n)
+# Recepcionista IA para inmobiliarias
 
-Agente de WhatsApp para una inmobiliaria **ficticia** de Bariloche ("Inmobiliaria Demo") que
-atiende, **precalifica leads** y **muestra propiedades de un catálogo real** — con traspaso a
-humano y un **verificador anti-alucinación** que impide inventar precios o links.
+**Atiende el WhatsApp de la inmobiliaria las 24 horas con su catálogo real, precalifica a cada
+interesado y le pasa la conversación a un asesor cuando hace falta. No inventa precios.**
 
-Funciona con WhatsApp real (Evolution API + Chatwoot): el equipo lo maneja desde la app de
-Chatwoot en el celular. Para instalarlo en una inmobiliaria → **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+Una sola instalación atiende a varias inmobiliarias. Cada una tiene su número, su catálogo, sus
+asesores y su tono. El equipo trabaja desde la app de Chatwoot en el celular.
 
-> Los datos del repo son sintéticos (propiedades, precios y teléfonos inventados). El catálogo
-> real de cada inmobiliaria se carga desde una planilla con `npm run importar`.
+## Qué resuelve
 
-## Demo en 10 segundos
-El bot recomienda solo propiedades que existen en la base. Si el modelo intenta decir un precio
-que **no** salió del catálogo, el verificador lo **bloquea** y responde "dejame confirmarlo con
-un asesor" + avisa al equipo. Eso es lo que se ve en el video.
+| Problema de la inmobiliaria | Qué hace el recepcionista |
+|---|---|
+| Consultas de noche, en fin de semana o mientras el asesor está en una visita | Responde al instante con propiedades **reales** de su planilla: código, precio y link a la ficha |
+| Un bot que inventa un precio es un problema legal y comercial | Un **verificador** revisa cada respuesta y bloquea cualquier precio, link, código o teléfono que no salga del catálogo |
+| Leads sin calificar | Pregunta de a poco operación, zona, presupuesto, ambientes, forma de pago y urgencia, y lo guarda |
+| Saber cuándo tiene que entrar una persona | Deriva sola si piden visita, oferta o reserva, si el presupuesto supera el umbral o si no pudo confirmar un dato, y deja una **nota privada con el motivo** |
+| Que el bot no se meta cuando el asesor ya tomó la charla | En cuanto escribe un asesor, el bot **se calla solo** en esa conversación. Vuelve con `/ia on` o solo, a las X horas sin mensajes del asesor |
 
-## Arquitectura
+## Cómo se ve
 
-```mermaid
-flowchart TD
-    WA[WhatsApp → Evolution → Chatwoot<br/>webhook message_created] --> IG{¿mensaje del cliente<br/>o comando /ia?}
-    IG -- "eco, bot de Evolution, actividad" --> END0([ignorar])
-    IG -- "sí" --> CL{¿inbox de un<br/>cliente activo?}
-    CL -- "no" --> END4([ignorar])
-    CL -- "sí: nombre, umbral,<br/>asesor, prompt_extra" --> NP{¿Nota privada<br/>/ia on|off?}
-    NP -- "comando, o un asesor<br/>escribió (sender user)" --> SET[Set ia_activa en leads] --> END1([fin])
-    NP -- "mensaje" --> PH{ia_activa? o pasaron<br/>las horas sin asesor}
-    PH -- "false (humano activo)" --> END2([fin: IA en pausa])
-    PH -- "true" --> BUF[Patrón 1<br/>Buffer Redis + Wait 7s]
-    BUF --> LAST{¿es el último<br/>mensaje?}
-    LAST -- "no" --> END3([descartar])
-    LAST -- "sí" --> CTX[Cargar lead + slots<br/>Postgres]
-    CTX --> AG[AI Agent · OpenRouter free<br/>memoria Redis<br/>returnIntermediateSteps=true]
-    AG -- tool --> T1[buscar_propiedades<br/>Postgres]
-    AG -- tool --> T2[guardar_precalificacion<br/>Postgres]
-    AG --> VER[Patrón 4<br/>Verificador anti-alucinación]
-    VER -- "hardFail" --> NOTE[Pausar IA + nota privada<br/>en Chatwoot con el motivo]
-    VER -- "ok" --> DER{¿derivar?<br/>presupuesto>umbral o pide humano}
-    DER -- "sí" --> NOTE
-    DER -- "no" --> OUT[Patrón 3<br/>Salida humanizada ≤250c]
-    NOTE --> OUT
-    OUT --> SEND[Chatwoot API<br/>escribiendo… + mensaje → WhatsApp]
-```
+1. El cliente escribe *"Busco un depto en venta en el Centro hasta 200 mil dólares"*.
+2. A los segundos recibe 2 o 3 propiedades reales, con código, precio y link.
+3. Pregunta por un barrio que no está en el catálogo: el bot no inventa. Le dice que lo confirma un
+   asesor y le deja la nota al equipo en Chatwoot.
+4. El asesor contesta desde la app y el bot ya no interviene.
 
-## Patrones reusados
-| # | Patrón | Rol en este flujo |
-|---|--------|-------------------|
-| 1 | Buffer de mensajes | Agrupa ráfagas antes de responder |
-| 2 | Pausa humana | si un asesor escribe, la IA se pausa sola; vuelve con `/ia on` o a las X horas sin actividad del asesor |
-| 3 | Salida humanizada | Mensajes ≤250 c, de a uno, con "escribiendo…" |
-| 4 | **Verificador anti-alucinación** | Bloquea precios/links no respaldados por el catálogo |
+Para mostrarlo: `npm run demo` y el guion de 60 segundos en **[docs/GUION-VIDEO.md](docs/GUION-VIDEO.md)**.
 
-## Stack
-n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres · Redis · Evolution API + Chatwoot (WhatsApp)
+## Cómo se instala
 
-Todo el stack es propio y se levanta con un comando (`docker-compose.yml`): n8n con su task
-runner, Postgres con pgvector (una base por servicio), Redis, Evolution API v2 y Chatwoot (web +
-sidekiq), con healthchecks y volúmenes. Si querés exponerlo, hay un túnel de Cloudflare opcional.
-Usa ~1,6 GB de RAM en reposo, así que entra en una PC de 8 GB.
+Necesitás Docker, Node.js 20 o más nuevo, una PC o VPS con 8 GB de RAM y una API key de OpenRouter.
 
 ```bash
 npm install
-npm run instalar                         # idempotente: stack, base, webhook y flujo de n8n
-npm run nuevo-cliente -- "Inmobiliaria"  # WhatsApp + inbox + cliente, y muestra el QR
-npm run importar -- propiedades.csv --cliente 1
+npm run instalar                                   # stack completo, base, webhook, Agent Bot y flujo de n8n
+npm run nuevo-cliente -- "Inmobiliaria del Lago"   # WhatsApp + inbox + cliente, y muestra el QR
+npm run importar -- planilla.csv --cliente 1       # catálogo de esa inmobiliaria
 ```
 
-Lo único manual: crear el admin de Chatwoot, pegar 2 tokens en `.env` (Chatwoot y OpenRouter) y
-escanear el QR de cada inmobiliaria. Los scripts te dicen cuándo.
+Lo único manual:
+- crear tu usuario de Chatwoot;
+- pegar 2 tokens en `.env` (Chatwoot y OpenRouter);
+- escanear el QR de cada inmobiliaria.
 
-**Multi-cliente:** una instalación atiende a N inmobiliarias. El flujo identifica a cada una por
-el inbox de Chatwoot (tabla `clientes`). Cada una tiene su catálogo, sus leads, su umbral de
-derivación, el teléfono de su asesor y un `prompt_extra` con su tono y sus horarios. Un inbox sin
-cliente activo se ignora.
+Los scripts son idempotentes y te avisan cuándo te toca a vos.
 
-## Probado en n8n (end-to-end)
+| Guía | Para qué |
+|---|---|
+| [docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md) | Instalación local, alta de clientes, catálogo, túnel y cómo se opera |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | VPS con Dokploy, DNS en Cloudflare (`chat.`, `n8n.`, `evo.`), HTTPS, backups diarios y cómo actualizar |
+| [docs/ALTA-CLIENTE.md](docs/ALTA-CLIENTE.md) | Checklist para sumar una inmobiliaria en menos de 30 minutos |
 
-`test/e2e/run.js` importa este flujo en una n8n real (2.46, la misma versión del stack), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **Chatwoot falso** que registra lo que se envía. Los mensajes entran con el formato real del webhook de Chatwoot. Así se prueba el flujo, no la suerte del modelo.
+## Cómo se opera: desde la app de Chatwoot
+
+| El asesor quiere… | Hace… |
+|---|---|
+| Atender él una conversación | **Escribe y listo**: el bot se pausa solo |
+| Devolvérsela al bot | Nota privada `/ia on`. Si no la manda, el bot vuelve solo a las X horas (12 por defecto) |
+| Pausar el bot sin escribirle al cliente | Nota privada `/ia off` |
+| Saber por qué el bot le pasó una charla | La nota privada 🤖 con el motivo: visita, oferta, presupuesto alto o un dato que no pudo confirmar |
+
+Y vos, como operador:
+
+| Comando | Qué hace |
+|---|---|
+| `npm run clientes` | Estado de todas las inmobiliarias: WhatsApp, propiedades, leads y si están activas |
+| `npm run nuevo-cliente -- "Nombre" --asesor … --umbral … --horas … --prompt-archivo …` | Alta o cambio de una inmobiliaria (y QR) |
+| `npm run importar -- planilla.csv --cliente <id> --desactivar-faltantes` | Actualiza el catálogo; valida todo antes de escribir |
+| `npm run clientes -- --desactivar <id>` | El bot deja de atender a esa inmobiliaria, sin perder datos |
+| `npm run backup` | Backup de Postgres; en el VPS corre todos los días por cron |
+| `npm run demo` | Reinicia "Inmobiliaria Demo" para mostrarla |
+
+## Cómo funciona
+
+```mermaid
+flowchart TD
+    WA[WhatsApp → Evolution API → Chatwoot<br/>webhook message_created] --> N[Normalizar entrada]
+    N -- "eco del Agent Bot, bot de Evolution" --> X0([ignorar])
+    N --> CL{¿el inbox es de un<br/>cliente activo?}
+    CL -- "no" --> X1([ignorar])
+    CL -- "sí: nombre, umbral, asesor,<br/>horas, prompt_extra" --> CMD{¿/ia on·off o escribió<br/>un asesor?}
+    CMD -- "sí" --> SET[pausa / reactiva la IA<br/>en esa conversación] --> X2([fin])
+    CMD -- "no" --> PH{¿IA activa? o ya pasaron<br/>las horas sin asesor}
+    PH -- "pausada" --> X3([fin])
+    PH -- "activa" --> BUF[Buffer Redis 7 s<br/>junta ráfagas]
+    BUF --> AG[Agente · OpenRouter<br/>memoria Redis por inmobiliaria]
+    AG -- tool --> T1[buscar_propiedades<br/>solo su catálogo]
+    AG -- tool --> T2[guardar_precalificacion]
+    AG --> VER[Verificador anti-alucinación<br/>precios, links, códigos, teléfonos]
+    VER -- "bloquea" --> NOTE[pausa + nota privada<br/>con el motivo]
+    VER -- "ok" --> DER{¿derivar? visita, oferta,<br/>presupuesto > umbral}
+    DER -- "sí" --> NOTE
+    DER -- "no" --> OUT[Mensajes ≤250 c<br/>con escribiendo…]
+    NOTE --> OUT
+    OUT --> SEND[Chatwoot API con el Agent Bot → Evolution → WhatsApp]
+```
+
+| Pieza | Rol |
+|---|---|
+| **Evolution API v2** | Conecta el número de WhatsApp de cada inmobiliaria (QR) y crea su inbox en Chatwoot |
+| **Chatwoot** | Inbox del equipo, app del celular, notas privadas. El bot escribe con su propio **Agent Bot** (`sender.type = agent_bot`), y así se distingue de los asesores (`user`) |
+| **n8n 2.x** | Un solo flujo para todas las inmobiliarias. Identifica a cada una por el inbox (tabla `clientes`) |
+| **Postgres** (pgvector) | Bases separadas para `inmo` (clientes, propiedades, leads y eventos), `chatwoot`, `n8n` y `evolution` |
+| **Redis** | Buffer de ráfagas y memoria de la conversación, separados por inmobiliaria |
+| **OpenRouter** | El modelo; se cambia en el nodo *OpenRouter Model*. El verificador funciona igual con cualquiera |
+
+Todo el stack es propio y corre con `docker compose`, con healthchecks y volúmenes. Usa ~1,6 GB de RAM
+en reposo: entra en una PC de 8 GB y en un VPS de 4–8 GB.
+
+## Probado de punta a punta
+
+`npm run test:e2e` levanta n8n 2.46 real, contra Postgres y Redis reales, con un **LLM falso
+determinístico** y un **Chatwoot falso** que registra lo que se envía. Los mensajes entran con el
+formato real del webhook de Chatwoot, con los tipos de remitente verificados contra Chatwoot 4.19.
+Así se prueba el flujo, no la suerte del modelo: **40 chequeos**.
 
 | Escenario | Qué verifica |
 |---|---|
 | Consulta | muestra solo propiedades del catálogo y guarda la precalificación |
 | Ráfaga | dos mensajes seguidos → el agente corre una vez y recibe los dos |
-| Precio inventado | el verificador bloquea "USD 150.000" sin respaldo, avisa al equipo y pausa la IA |
-| Precio alterado | bloquea "USD 25.000" cuando el catálogo dice 125.000 |
-| Pausa humana | `/ia off` silencia (ni llama al modelo), `/ia on` reactiva |
-| Pausa automática | un mensaje público de un asesor (`sender.type = user`) pausa la IA; `/ia on` la vuelve a prender |
-| Reactivación automática | a las 11 h sigue en pausa; a las 13 h (umbral de 12 h del cliente) responde de nuevo |
-| Visita | responde, deriva, pausa y deja nota privada con el motivo |
-| Presupuesto alto | más de USD 400.000 → deriva a un asesor |
-| Eco | ignora los mensajes y notas del propio bot (Agent Bot, `sender.type = agent_bot`) y no se pausa con ellos |
-| Bot de Evolution | ignora la conversación con "EvolutionAPI", donde Evolution manda el QR y el estado de la conexión |
-| Multi-cliente | cada inmobiliaria ve solo su catálogo y usa su umbral y su `prompt_extra` |
-| Mismo WhatsApp, dos inmobiliarias | dos leads separados, y la memoria de la conversación no pasa de una a otra |
+| Precio inventado / alterado | el verificador bloquea "USD 150.000" sin respaldo y "USD 25.000" cuando el catálogo dice 125.000 |
+| Derivación | por visita y por presupuesto mayor al umbral: pausa y nota privada con el motivo |
+| Pausa humana | `/ia off` silencia (ni llama al modelo) y `/ia on` reactiva |
+| Pausa automática | un mensaje público de un asesor pausa la IA |
+| Reactivación automática | a las 11 h sigue en pausa; a las 13 h (umbral de 12 h) responde de nuevo |
+| Eco y bot de Evolution | ignora los mensajes del propio Agent Bot y la conversación del QR de Evolution |
+| Multi-cliente | cada inmobiliaria ve solo su catálogo, con su umbral y su `prompt_extra` |
+| Mismo WhatsApp, dos inmobiliarias | dos leads separados, y la memoria no pasa de una a otra |
 | Inbox sin cliente | un inbox sin cliente, o con el cliente inactivo, se ignora |
-| Autenticación | todas las llamadas a la API de Chatwoot llevan `api_access_token` |
+| Demo | el seed se carga en un cliente sin duplicar ni tocar a otros |
+| Autenticación | todas las llamadas a Chatwoot llevan `api_access_token` |
 
 ```bash
 docker compose -f docker-compose.test.yml up -d
-npm install
-N8N_BIN=./test/e2e/n8n-docker.sh npm run test:e2e   # o N8N_BIN=/ruta/a/n8n si lo tenés instalado
+N8N_BIN=./test/e2e/n8n-docker.sh npm run test:e2e   # n8n desde su imagen oficial (Linux); o N8N_BIN=/ruta/a/n8n
 ```
 
-`n8n-docker.sh` corre el CLI de n8n desde la imagen oficial con la red del host (Linux), así no
-hace falta instalar n8n. El test usa sus propios Postgres y Redis (`docker-compose.test.yml`, puertos
-5432 y 6379), separados del stack.
-
-### Lo que el test encontró en la v1 (y está arreglado en la v2)
-- **Los mensajes salían vacíos:** el envío leía `$json` de la respuesta del nodo "Typing" en vez del lote; ahora lee `$('Enviar de a uno').item`.
-- **El buffer perdía mensajes:** de una ráfaga solo procesaba el último. Ahora acumula en una lista de Redis y el agente recibe todo junto.
-- **El verificador dejaba pasar precios alterados:** buscaba los dígitos como substring de toda la evidencia, así que "25.000" pasaba porque está dentro de "125.000". Ahora usa [verificador-llm](https://github.com/tahielt/verificador-llm) con hechos armados desde las herramientas del turno (precio, expensas, ambientes, dormitorios, m², links, códigos).
-- **La pausa no se aplicaba a leads nuevos:** el `UPDATE` no hacía nada si el lead no existía todavía; ahora es un upsert.
-- **La derivación por presupuesto alto no existía:** ahora cada inmobiliaria tiene su umbral (`clientes.umbral_usd`, 400.000 por defecto).
-
-## Ponerlo en producción
-- Instalación y operación (stack, clientes, catálogo, túnel): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
-- VPS con Dokploy, DNS en Cloudflare, HTTPS, backups diarios y actualizaciones: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
-- Alta de una inmobiliaria en menos de 30 minutos: **[docs/ALTA-CLIENTE.md](docs/ALTA-CLIENTE.md)**.
-Para probar el webhook a mano sin WhatsApp: `workflows/payloads-de-prueba.md`.
+Para probar el webhook a mano, sin WhatsApp: `workflows/payloads-de-prueba.md`.
 
 ## Datos
-- `data/schema.sql` + `data/migraciones/`: tablas `clientes`, `propiedades`, `leads` y `eventos_equipo`.
-  Propiedades, leads y eventos llevan `cliente_id`. Las migraciones son idempotentes y no borran datos.
-- `data/seed_propiedades.sql`: 20 propiedades sintéticas de Bariloche para la demo.
-- `data/plantilla-propiedades.csv`: la planilla que completa la inmobiliaria. Se carga con
-  `npm run importar -- archivo.csv --cliente <id> --desactivar-faltantes`, que valida todo antes de escribir.
 
----
-🎥 Video (60-90 s): _pendiente_ · Parte del [portfolio de automatización n8n](https://github.com/tahielt).
+- `data/schema.sql` + `data/migraciones/`: tablas `clientes`, `propiedades`, `leads` y `eventos_equipo`.
+  Las migraciones son idempotentes y no borran datos.
+- `data/plantilla-propiedades.csv`: la planilla que completa cada inmobiliaria.
+- `data/seed_propiedades.sql`: 20 propiedades **sintéticas** de Bariloche para la demo. Los datos del
+  repo son inventados: propiedades, precios y teléfonos.
+
+Detalle funcional en [SPEC.md](SPEC.md). Licencia MIT.

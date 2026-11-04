@@ -7,6 +7,8 @@
     "nuevo-cliente": "node scripts/nuevo-cliente.js",
     "clientes": "node scripts/clientes.js",
     "importar": "node scripts/importar-propiedades.js",
+    "demo": "node scripts/demo.js",
+    "backup": "sh scripts/backup.sh",
     "test:e2e": "node test/e2e/run.js"
   },
   "dependencies": {

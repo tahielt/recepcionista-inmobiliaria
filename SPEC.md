@@ -1,7 +1,7 @@
-# SPEC — Recepcionista IA Inmobiliaria (WhatsApp)
+# SPEC — Recepcionista IA para inmobiliarias (WhatsApp)
 
-> Proyecto de portfolio. Inmobiliaria **FICTICIA** de Bariloche ("Inmobiliaria Demo").
-> Todo sintético: propiedades, precios, teléfonos y conversaciones son inventados.
+> Producto multi-inmobiliaria: una instalación, N inmobiliarias. Los datos del repo (propiedades,
+> precios, teléfonos y "Inmobiliaria Demo" de Bariloche) son sintéticos.
 
 ## Qué hace
 Agente de WhatsApp que atiende, **precalifica** al lead y **muestra propiedades reales del

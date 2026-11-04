@@ -106,13 +106,13 @@ export async function instanciaConInbox(env, instancia, nombreInbox) {
       },
     });
   }
-  const { nameInbox } = await evolution(`/chatwoot/find/${instancia}`);
-  for (let i = 0; i < 30; i++) { // Evolution crea el inbox en segundo plano
-    const inbox = (await chatwoot(`/api/v1/accounts/${cuenta}/inboxes`)).payload.find((x) => x.name === nameInbox);
+  for (let i = 0; i < 30; i++) { // Evolution guarda la config de Chatwoot y crea el inbox en segundo plano
+    const { nameInbox } = await evolution(`/chatwoot/find/${instancia}`);
+    const inbox = nameInbox && (await chatwoot(`/api/v1/accounts/${cuenta}/inboxes`)).payload.find((x) => x.name === nameInbox);
     if (inbox) return { cuenta, inbox };
     await new Promise((ok) => setTimeout(ok, 1000));
   }
-  throw new Error(`Evolution no creó el inbox "${nameInbox}" en Chatwoot. Revisá: docker compose logs evolution`);
+  throw new Error(`Evolution no creó el inbox de "${instancia}" en Chatwoot. Revisá: docker compose logs evolution`);
 }
 
 /** Muestra el QR de la instancia en la terminal, si todavía no está conectada. */
@@ -126,4 +126,53 @@ export async function mostrarQR(env, instancia) {
     (await import('qrcode-terminal')).default.generate(qr.code, { small: true });
   } else console.log(`  Evolution todavía no generó el QR (${JSON.stringify(qr)}). Volvé a correr el comando en unos segundos.`);
   console.log('  El QR también aparece en Chatwoot, en la conversación con "EvolutionAPI" de ese inbox.');
+}
+
+// ── Clientes ─────────────────────────────────────────────────────────────────
+/** Alta o actualización de un cliente por inbox. Los campos en null no pisan lo que ya tenía. */
+export async function guardarCliente(db, { nombre, inboxId, umbral = null, asesor = null, prompt = null, horas = null }) {
+  const { rows: [cliente] } = await db.query(
+    `INSERT INTO clientes (nombre, inbox_id, umbral_usd, telefono_asesor, prompt_extra, horas_reactivacion)
+     VALUES ($1, $2, COALESCE($3::int, 400000), $4::text, COALESCE($5::text, ''), COALESCE($6::int, 12))
+     ON CONFLICT (inbox_id) DO UPDATE SET nombre = EXCLUDED.nombre, activo = true,
+       umbral_usd = COALESCE($3::int, clientes.umbral_usd),
+       telefono_asesor = COALESCE($4::text, clientes.telefono_asesor),
+       prompt_extra = COALESCE($5::text, clientes.prompt_extra),
+       horas_reactivacion = COALESCE($6::int, clientes.horas_reactivacion)
+     RETURNING *, (xmax = 0) AS nuevo`,
+    [nombre, inboxId, umbral, asesor, prompt, horas],
+  );
+  return cliente;
+}
+
+const COLS_PROPIEDAD = ['codigo', 'titulo', 'operacion', 'tipo', 'zona', 'ambientes', 'dormitorios', 'm2_cubiertos', 'precio_usd',
+  'unidad_precio', 'expensas_usd', 'direccion_aprox', 'descripcion', 'url_ficha', 'destacada', 'activa'];
+
+/** Carga en un cliente un .sql de propiedades sin cliente_id (como data/seed_propiedades.sql). Upsert por código. */
+export async function cargarPropiedadesSql(db, clienteId, sql) {
+  await db.query('BEGIN');
+  try {
+    // Una tabla temporal con el mismo nombre tapa a la real (pg_temp va primero en el search_path).
+    await db.query('CREATE TEMP TABLE propiedades (LIKE public.propiedades INCLUDING DEFAULTS) ON COMMIT DROP; ALTER TABLE pg_temp.propiedades ALTER COLUMN cliente_id DROP NOT NULL');
+    await db.query(sql);
+    const cols = COLS_PROPIEDAD.join(', ');
+    const { rowCount } = await db.query(
+      `INSERT INTO public.propiedades (cliente_id, ${cols}) SELECT $1, ${cols} FROM pg_temp.propiedades
+       ON CONFLICT (cliente_id, codigo) DO UPDATE SET ${COLS_PROPIEDAD.slice(1).map((c) => `${c} = EXCLUDED.${c}`).join(', ')}`,
+      [clienteId],
+    );
+    await db.query('COMMIT');
+    return rowCount;
+  } catch (e) {
+    await db.query('ROLLBACK');
+    throw e;
+  }
+}
+
+/** Borra leads, eventos y la memoria/buffer de Redis de un cliente: sus conversaciones arrancan de cero. */
+export async function reiniciarConversaciones(db, cliente) {
+  await db.query('DELETE FROM eventos_equipo WHERE cliente_id = $1', [cliente.id]);
+  await db.query('DELETE FROM leads WHERE cliente_id = $1', [cliente.id]);
+  const patrones = [`${cliente.inbox_id}:wa:*`, `buf:${cliente.inbox_id}:wa:*`, `last:${cliente.inbox_id}:wa:*`];
+  compose(['exec', '-T', 'redis', 'sh', '-c', patrones.map((p) => `redis-cli -n 1 --scan --pattern '${p}' | xargs -r redis-cli -n 1 del >/dev/null`).join('; ')]);
 }

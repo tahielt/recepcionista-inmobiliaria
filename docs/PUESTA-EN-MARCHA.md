@@ -144,6 +144,8 @@ npm run importar -- propiedades.csv --cliente 3 --desactivar-faltantes
 - Para actualizar precios o dar de baja propiedades vendidas, se vuelve a correr con la planilla nueva.
 - `--desactivar-faltantes` saca del catálogo de **ese cliente** lo que ya no está en la planilla.
 - Los códigos son únicos dentro de cada inmobiliaria: dos clientes pueden tener un `ABC-001` cada uno.
+- Para una demo, `npm run demo` crea "Inmobiliaria Demo" con las 20 propiedades de `data/seed_propiedades.sql`.
+  Ver [GUION-VIDEO.md](GUION-VIDEO.md).
 
 ## 4. Probarlo
 

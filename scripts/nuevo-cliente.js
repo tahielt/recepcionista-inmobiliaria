@@ -3,7 +3,7 @@
 // Si el cliente ya existe, actualiza solo los datos que le pases y vuelve a mostrar el QR.
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
-import { conexionInmo, instanciaConInbox, leerEnv, mostrarQR, slug } from './lib.js';
+import { conexionInmo, guardarCliente, instanciaConInbox, leerEnv, mostrarQR, slug } from './lib.js';
 
 const args = process.argv.slice(2);
 const opcion = (k) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : undefined; };
@@ -23,17 +23,7 @@ const { inbox } = await instanciaConInbox(env, instancia, nombre);
 
 const db = new pg.Client(conexionInmo(env));
 await db.connect();
-const { rows: [cliente] } = await db.query(
-  `INSERT INTO clientes (nombre, inbox_id, umbral_usd, telefono_asesor, prompt_extra, horas_reactivacion)
-   VALUES ($1, $2, COALESCE($3::int, 400000), $4::text, COALESCE($5::text, ''), COALESCE($6::int, 12))
-   ON CONFLICT (inbox_id) DO UPDATE SET nombre = EXCLUDED.nombre, activo = true,
-     umbral_usd = COALESCE($3::int, clientes.umbral_usd),
-     telefono_asesor = COALESCE($4::text, clientes.telefono_asesor),
-     prompt_extra = COALESCE($5::text, clientes.prompt_extra),
-     horas_reactivacion = COALESCE($6::int, clientes.horas_reactivacion)
-   RETURNING *, (xmax = 0) AS nuevo`,
-  [nombre, inbox.id, numero('umbral'), opcion('asesor') ?? null, prompt, numero('horas')],
-);
+const cliente = await guardarCliente(db, { nombre, inboxId: inbox.id, umbral: numero('umbral'), asesor: opcion('asesor') ?? null, prompt, horas: numero('horas') });
 await db.end();
 console.log(`▸ Cliente ${cliente.nuevo ? 'creado' : 'actualizado'}: id ${cliente.id} · inbox ${cliente.inbox_id} · umbral USD ${cliente.umbral_usd}` +
   ` · IA vuelve sola ${cliente.horas_reactivacion ? `a las ${cliente.horas_reactivacion} h` : 'solo con /ia on'}` +
