@@ -50,11 +50,21 @@ flowchart TD
 | 4 | **Verificador anti-alucinación** | Bloquea precios/links no respaldados por el catálogo |
 
 ## Stack
-n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres/Supabase · Redis · Evolution API + Chatwoot (WhatsApp)
+n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12b:free`) · Postgres · Redis · Evolution API + Chatwoot (WhatsApp)
+
+Todo el stack es propio y se levanta con un comando (`docker-compose.yml`): n8n con su task
+runner, Postgres con pgvector (una base por servicio), Redis, Evolution API v2 y Chatwoot (web +
+sidekiq), con healthchecks y volúmenes. Si querés exponerlo, hay un túnel de Cloudflare opcional.
+Usa ~1,6 GB de RAM en reposo, así que entra en una PC de 8 GB.
+
+```bash
+cp .env.example .env    # completá los secretos
+docker compose up -d --wait
+```
 
 ## Probado en n8n (end-to-end)
 
-`test/e2e/run.js` importa este flujo en una n8n real (2.35), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **Chatwoot falso** que registra lo que se envía. Los mensajes entran con el formato real del webhook de Chatwoot. Así se prueba el flujo, no la suerte del modelo.
+`test/e2e/run.js` importa este flujo en una n8n real (2.46, la misma versión del stack), contra Postgres y Redis reales, con un **LLM falso determinístico** (la credencial de OpenRouter apunta a un servidor local que responde siempre igual) y un **Chatwoot falso** que registra lo que se envía. Los mensajes entran con el formato real del webhook de Chatwoot. Así se prueba el flujo, no la suerte del modelo.
 
 | Escenario | Qué verifica |
 |---|---|
@@ -71,8 +81,12 @@ n8n 2.x · AI Agent (LangChain) · OpenRouter (`nvidia/nemotron-3-super-120b-a12
 ```bash
 docker compose -f docker-compose.test.yml up -d
 npm install
-N8N_BIN="npx n8n" npm run test:e2e
+N8N_BIN=./test/e2e/n8n-docker.sh npm run test:e2e   # o N8N_BIN=/ruta/a/n8n si lo tenés instalado
 ```
+
+`n8n-docker.sh` corre el CLI de n8n desde la imagen oficial con la red del host (Linux), así no
+hace falta instalar n8n. El test usa sus propios Postgres y Redis (`docker-compose.test.yml`, puertos
+5432 y 6379), separados del stack.
 
 ### Lo que el test encontró en la v1 (y está arreglado en la v2)
 - **Los mensajes salían vacíos:** el envío leía `$json` de la respuesta del nodo "Typing" en vez del lote; ahora lee `$('Enviar de a uno').item`.
@@ -82,7 +96,7 @@ N8N_BIN="npx n8n" npm run test:e2e
 - **La derivación por presupuesto alto no existía:** el umbral (USD 400.000) está en "Normalizar entrada".
 
 ## Ponerlo en producción
-Paso a paso (base, Evolution, Chatwoot, credenciales y webhook): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
+Paso a paso (stack, base, Evolution, Chatwoot, credenciales, webhook y túnel): **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**.
 Para probar el webhook a mano sin WhatsApp: `workflows/payloads-de-prueba.md`.
 
 ## Datos

@@ -227,7 +227,7 @@ try {
   process.exitCode = fallas ? 1 : 0;
   llm.close();
 } finally {
-  n8n?.kill('SIGKILL');
+  n8n?.kill('SIGTERM'); // SIGTERM: con n8n-docker.sh, docker lo reenvía y el contenedor se borra
   wa.close();
   await db.end().catch(() => {});
 }
